@@ -118,7 +118,21 @@ finally:
     print(f"__E2B_EXEC_TIME_SEC__:{{__e2b_end - __e2b_start}}", file=sys.stderr)
 """
         
-        execution = global_sandbox.run_code(wrapper_code)
+        try:
+            execution = global_sandbox.run_code(wrapper_code)
+        except Exception as e:
+            error_str = str(e).lower()
+            if "not found" in error_str or "timeout" in error_str:
+                logger.warning("E2B Sandbox timed out or was not found. Re-initializing...")
+                logs.append("Sandbox timed out. Re-initializing...")
+                global_sandbox = None
+                init_sandbox()
+                continue  # Retry with the new sandbox
+            else:
+                # If it's a different exception from E2B SDK, we should still fail or handle it
+                logger.error(f"E2B SDK Error: {e}")
+                logs.append(f"E2B SDK Error: {e}")
+                break
         
         if execution.error:
             error_msg = f"{execution.error.name}: {execution.error.value}\n{execution.error.traceback}"

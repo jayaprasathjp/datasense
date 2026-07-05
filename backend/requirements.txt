@@ -3,7 +3,7 @@ uvicorn[standard]
 pydantic
 pydantic-settings
 google-genai
-e2b_code_interpreter
+modal
 google-cloud-bigquery
 pandas
 db-dtypes

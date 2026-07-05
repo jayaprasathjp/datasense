@@ -15,10 +15,31 @@ image = (
         "bitsandbytes",
         "peft",
         "scipy",
-        "fastapi[standard]"
+        "fastapi[standard]",
+        "hf_transfer"
     )
     .pip_install("unsloth")
+    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
 )
+
+def download_models():
+    """Downloads the base model and LoRA weights during the image build step so they are cached in the container."""
+    from unsloth import FastLanguageModel
+    
+    BASE_MODEL = "unsloth/gemma-4-E2B-it"
+    LORA_ADAPTER = "sanjaymalladi/DataSense-Modal-E2B-SFT"
+    
+    print("Downloading models into the Docker image...")
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=BASE_MODEL,
+        max_seq_length=4096,
+        dtype=None,
+        load_in_4bit=True,
+    )
+    model.load_adapter(LORA_ADAPTER)
+    print("Download complete!")
+
+image = image.run_function(download_models)
 
 class RequestBody(BaseModel):
     system_prompt: str

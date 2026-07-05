@@ -1,8 +1,18 @@
 import logging
 import httpx
 from app.core.config import settings
+from google import genai
 
 logger = logging.getLogger(__name__)
+
+# Initialize the Gemini client using Vertex AI (GCP)
+gemini_client = genai.Client(
+    vertexai=True,
+    project="datasense-gpu",
+    location="us-central1"
+)
+GEMINI_MODEL_ID = "gemini-2.5-flash"
+
 
 CUDF_CHEATSHEET = """
 # ════════════════════════════════════════════════════════════════
@@ -61,27 +71,43 @@ SYSTEM_PROMPT_CUDF = (
     "- You MUST output the result as a valid JSON string using `json.dumps()`.\n"
     "- Ensure you convert any numpy data types (like np.float64) to native Python types (float, int) before calling json.dumps(), otherwise it will fail to serialize.\n"
     "- Example: `import json; print(json.dumps({'result': float(final_value)}))`\n"
-    "- Follow the cheat-sheet above exactly — no pandas, no sklearn."
+    "- Follow the cheat-sheet above exactly — no pandas, no sklearn.\n"
+    "- NEVER generate comments about dummy data or create a dummy DataFrame. Assume `df` is already in memory."
 )
 
-def _call_modal(system_prompt: str, user_prompt: str) -> str:
-    """Helper to send prompt to the Modal serverless inference endpoint."""
-    if not settings.modal_url:
-        raise ValueError("MODAL_URL is not set in the environment variables.")
-        
-    logger.info(f"Sending prompt to Modal LLM Endpoint: {settings.modal_url}")
-    payload = {
-        "system_prompt": system_prompt,
-        "user_prompt": user_prompt
-    }
-    
-    # We use a long timeout since Modal might have to cold-start (pull the 4GB model)
-    with httpx.Client(timeout=300.0) as client:
-        resp = client.post(settings.modal_url, json=payload)
-        resp.raise_for_status()
-        result_text = resp.json().get("result", "")
-        
-    return result_text
+# -------------------------------------------------------------------------
+# MODAL CLIENT LOGIC (Commented out / Kept for later fix)
+# -------------------------------------------------------------------------
+# def _call_modal(system_prompt: str, user_prompt: str) -> str:
+#     """Helper to send prompt to the Modal serverless inference endpoint."""
+#     if not settings.modal_url:
+#         raise ValueError("MODAL_URL is not set in the environment variables.")
+#         
+#     logger.info(f"Sending prompt to Modal LLM Endpoint: {settings.modal_url}")
+#     payload = {
+#         "system_prompt": system_prompt,
+#         "user_prompt": user_prompt
+#     }
+#     
+#     # We use a long timeout since Modal might have to cold-start (pull the 4GB model)
+#     # Modal uses 303 Redirects for long-running executions, so follow_redirects=True is required
+#     with httpx.Client(timeout=300.0, follow_redirects=True) as client:
+#         resp = client.post(settings.modal_url, json=payload)
+#         resp.raise_for_status()
+#         result_text = resp.json().get("result", "")
+#         
+#     return result_text
+# -------------------------------------------------------------------------
+
+def _call_gemini_vertex(system_prompt: str, user_prompt: str) -> str:
+    """Helper to send prompt to Gemini via Vertex AI."""
+    logger.info(f"Sending prompt to Gemini Vertex AI ({GEMINI_MODEL_ID})")
+    prompt = system_prompt + "\n\n" + user_prompt
+    response = gemini_client.models.generate_content(
+        model=GEMINI_MODEL_ID,
+        contents=prompt
+    )
+    return response.text
 
 def _extract_code(text: str) -> str:
     code = text.strip()
@@ -95,7 +121,7 @@ def _extract_code(text: str) -> str:
 
 def synthesize_code(query: str, task_type: str = "data_analysis") -> str:
     """
-    Translates a natural language query into cuDF code using the fine-tuned model on Modal.
+    Translates a natural language query into cuDF code using Gemini.
     """
     logger.info(f"Synthesizing code for query: {query}")
     
@@ -107,15 +133,16 @@ Assume there is a pre-loaded cuDF DataFrame named `df`.
 The DataFrame has the following columns: id, order_id, user_id, product_id, sale_price, created_at, status.
 """
     
-    model_output = _call_modal(SYSTEM_PROMPT_CUDF, user_prompt)
+    # Switched back to Gemini Vertex for now
+    model_output = _call_gemini_vertex(SYSTEM_PROMPT_CUDF, user_prompt)
     return _extract_code(model_output)
 
 
 def fix_code(original_code: str, error_message: str) -> str:
     """
-    Asks the fine-tuned model to fix the cuDF code based on an execution error.
+    Asks Gemini to fix the cuDF code based on an execution error.
     """
-    logger.info("Sending code to Modal LLM for error fixing...")
+    logger.info("Sending code to Gemini for error fixing...")
     
     user_prompt = f"""
 The following cuDF code was executed but resulted in an error. 
@@ -131,5 +158,6 @@ Error Message:
 Output ONLY the corrected valid Python code. No markdown, no explanations.
 """
     
-    model_output = _call_modal(SYSTEM_PROMPT_CUDF, user_prompt)
+    # Switched back to Gemini Vertex for now
+    model_output = _call_gemini_vertex(SYSTEM_PROMPT_CUDF, user_prompt)
     return _extract_code(model_output)

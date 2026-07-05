@@ -35,8 +35,10 @@ class ExecuteGpuResponse(BaseModel):
 @router.post("/api/synthesize", response_model=SynthesizeResponse)
 def synthesize(request: SynthesizeRequest):
     try:
-        code = synthesize_code(request.query, request.task_type)
-        return SynthesizeResponse(cpu_code=code, gpu_code=code)
+        gpu_code = synthesize_code(request.query, request.task_type)
+        # Hack for benchmarking: strip cuDF specific imports so the exact same logic can run on standard pandas
+        cpu_code = gpu_code.replace("import cudf", "import pandas as pd").replace("cudf.", "pd.")
+        return SynthesizeResponse(cpu_code=cpu_code, gpu_code=gpu_code)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

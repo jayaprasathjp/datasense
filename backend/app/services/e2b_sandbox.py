@@ -76,13 +76,25 @@ def execute_on_gpu(user_code: str) -> dict:
     current_code = user_code
     retry_count = 0
     final_results = None
+    pure_exec_time = None
     
     while retry_count < MAX_RETRIES:
         logger.info(f"Executing code on Sandbox (Attempt {retry_count + 1})...")
         logs.append(f"Executing attempt {retry_count + 1}...")
         
-        # We don't prepend setup code anymore, because `df` is already globally in memory in the REPL!
-        execution = global_sandbox.run_code(current_code)
+        # Wrap the code to measure the exact millisecond execution time strictly inside the VM
+        wrapper_code = f"""
+import time
+import sys
+__e2b_start = time.perf_counter()
+try:
+    exec({repr(current_code)})
+finally:
+    __e2b_end = time.perf_counter()
+    print(f"__E2B_EXEC_TIME_SEC__:{{__e2b_end - __e2b_start}}", file=sys.stderr)
+"""
+        
+        execution = global_sandbox.run_code(wrapper_code)
         
         if execution.error:
             error_msg = f"{execution.error.name}: {execution.error.value}\n{execution.error.traceback}"
@@ -100,6 +112,15 @@ def execute_on_gpu(user_code: str) -> dict:
             logger.info("Execution successful.")
             logs.append("Execution successful.")
             
+            # Extract the pure execution time from stderr
+            if execution.logs.stderr:
+                for line in execution.logs.stderr:
+                    if "__E2B_EXEC_TIME_SEC__:" in line:
+                        try:
+                            pure_exec_time = float(line.split("__E2B_EXEC_TIME_SEC__:")[1].strip())
+                        except Exception:
+                            pass
+
             if execution.logs.stdout:
                 output_str = "\n".join(execution.logs.stdout).strip()
                 logs.append(f"Stdout:\n{output_str}")
@@ -122,10 +143,13 @@ def execute_on_gpu(user_code: str) -> dict:
     # global_sandbox.kill()
 
     end_time = time.perf_counter()
-    execution_time = end_time - start_time
+    overall_time = end_time - start_time
+    
+    # Use pure_exec_time if we successfully intercepted it, otherwise fallback to overall time
+    final_time = pure_exec_time if pure_exec_time is not None else overall_time
     
     return {
-        "execution_time_sec": execution_time,
+        "execution_time_sec": final_time,
         "results": final_results if isinstance(final_results, list) else [final_results],
         "logs": logs
     }

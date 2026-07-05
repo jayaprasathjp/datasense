@@ -36,9 +36,10 @@ def fetch_ecommerce_data() -> None:
         sale_price, 
         created_at, 
         status 
-    FROM `bigquery-public-data.thelook_ecommerce.order_items` 
+    FROM `bigquery-public-data.thelook_ecommerce.order_items`,
+    UNNEST(GENERATE_ARRAY(1, 100))
     WHERE status NOT IN ('Cancelled', 'Returned') 
-    LIMIT 1200000
+    LIMIT 10000000
     """
     
     # Run the query and convert to a pandas DataFrame

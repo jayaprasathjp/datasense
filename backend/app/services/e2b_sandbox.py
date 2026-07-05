@@ -23,7 +23,7 @@ def execute_on_gpu(user_code: str) -> dict:
     logger.info("Initializing E2B Sandbox...")
     logs.append("Initializing E2B Sandbox...")
     try:
-        sandbox = Sandbox(api_key=settings.e2b_api_key)
+        sandbox = Sandbox.create(api_key=settings.e2b_api_key)
     except Exception as e:
         logger.error(f"Failed to initialize sandbox: {e}")
         return {"execution_time_sec": 0, "results": [], "logs": logs + [f"Failed to initialize sandbox: {e}"]}
@@ -41,11 +41,25 @@ def execute_on_gpu(user_code: str) -> dict:
 
         # Prepare the injection payload
         setup_code = """
-import cudf.pandas
-cudf.pandas.install()
+import sys
+import subprocess
+
+# Ensure pyarrow is installed to read parquet
+try:
+    import pyarrow
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "pyarrow"], stdout=subprocess.DEVNULL)
+
+# Try to use cuDF (GPU accelerated pandas) if available
+try:
+    import cudf.pandas
+    cudf.pandas.install()
+    print("cuDF enabled for GPU acceleration.", file=sys.stderr)
+except Exception as e:
+    print(f"cuDF not available, falling back to standard CPU pandas. (Reason: {e})", file=sys.stderr)
+
 import pandas as pd
 import json
-import sys
 
 # Load the dataset
 try:
@@ -104,8 +118,8 @@ except Exception as e:
             final_results = []
 
     finally:
-        logger.info("Closing E2B Sandbox...")
-        sandbox.close()
+        logger.info("Killing E2B Sandbox...")
+        sandbox.kill()
 
     end_time = time.perf_counter()
     execution_time = end_time - start_time

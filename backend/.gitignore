@@ -1,0 +1,32 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# Environment variables
+.env
+.env.local
+.env.*
+
+# Temporary / Data files (Don't commit the parquet file!)
+*.parquet
+data.parquet
+*.csv
+*.db
+*.sqlite3
+
+# Credentials & Service Accounts (Don't commit API keys or GCP JSON keys!)
+*.json
+!package.json
+!tsconfig.json
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store

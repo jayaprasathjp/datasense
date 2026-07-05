@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+google-genai
+e2b_code_interpreter
+google-cloud-bigquery
+pandas
+db-dtypes
+pyarrow

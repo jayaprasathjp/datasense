@@ -1,0 +1,38 @@
+DataSense hackathon — final decision notes
+
+GPU sweep ranking:
+                                    project_direction  max_speedup  mean_speedup
+   Time-series alerting (freshness, anomaly tracking)    58.946633     27.821509
+                 Dashboard backend / enrichment joins    39.816896     16.566130
+                                                 sort    21.094967     11.349755
+                  Dashboard backend / BI acceleration    18.377902     12.137586
+Risk / priority scoring (triage, fraud, ops priority)    16.587949     12.856983
+             Forecasting (demand, revenue, inventory)    11.658666      7.043971
+         Segmentation (weakest — avoid as core story)     2.969237      1.961616
+
+LLM task speedups:
+             task                      category  exec_speedup_x  total_speedup_x  pandas_exec_s  cudf_exec_s
+ priority_ranking       Risk / priority scoring        0.064242         1.037280       0.040518     0.630711
+    rolling_alert          Time-series alerting        0.732653         2.822535       0.096645     0.131911
+dashboard_summary        Dashboard backend / BI        0.152252         0.856219       0.031611     0.207621
+       risk_model Risk scoring / classification      215.889126         4.039140      81.040321     0.375379
+Decision rule (use the bigger of the two signals):
+
+  rf_classify_fit wins (>20×)  →  Build: RISK / PRIORITY SCORING TOOL
+     User:   Ops manager, support lead, fraud analyst
+     Output: Ranked rows with predicted risk probability
+     GPU story: cuML RF trains 30× faster → refresh scores every 5 min
+                instead of daily → real-time triage becomes possible
+
+  rolling_window wins (>20×)   →  Build: TIME-SERIES ALERTING TOOL
+     User:   Store manager, site-reliability engineer
+     Output: Alert list — stores with anomalous rolling metrics
+     GPU story: 69× cuDF rolling → dashboard refreshes in <1s vs 60s
+
+  merge_join / groupby win      →  Build: GPU-ACCELERATED DASHBOARD BACKEND
+     User:   Analyst using Looker / BI tool
+     Output: Aggregated KPI table (revenue, margin, ticket age by region)
+     GPU story: 40× join speed → BigQuery-scale queries on-GPU
+
+  Nothing >5× consistently     →  Pivot: BigQuery + Gemini NL interface
+     Don't force the GPU story; lean on Google Cloud data-layer instead

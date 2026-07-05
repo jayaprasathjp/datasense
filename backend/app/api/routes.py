@@ -1,13 +1,10 @@
 import time
-import sys
-import io
 import json
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 from app.services.llm_engine import synthesize_code
-from app.services.e2b_sandbox import execute_on_gpu
-from app.data.bigquery import get_dataframe
+from app.services.e2b_sandbox import execute_on_gpu, execute_on_cpu
 
 router = APIRouter()
 
@@ -22,74 +19,46 @@ class SynthesizeResponse(BaseModel):
 class ExecuteRequest(BaseModel):
     code: str
 
-class ExecuteCpuResponse(BaseModel):
+class ExecuteResponse(BaseModel):
     execution_time_sec: float
-    status: str
     results: Optional[List[Dict[str, Any]]] = None
-
-class ExecuteGpuResponse(BaseModel):
-    execution_time_sec: float
-    results: List[Dict[str, Any]]
-    logs: List[str]
+    logs: List[str] = []
+    status: str = "success"
 
 @router.post("/api/synthesize", response_model=SynthesizeResponse)
 def synthesize(request: SynthesizeRequest):
     try:
         gpu_code = synthesize_code(request.query, request.task_type)
-        # Hack for benchmarking: strip cuDF specific imports so the exact same logic can run on standard pandas
+        # Convert cuDF code → pandas code for CPU execution
         cpu_code = gpu_code.replace("import cudf", "import pandas as pd").replace("cudf.", "pd.")
         return SynthesizeResponse(cpu_code=cpu_code, gpu_code=gpu_code)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/api/execute-cpu", response_model=ExecuteCpuResponse)
+@router.post("/api/execute-cpu", response_model=ExecuteResponse)
 def execute_cpu(request: ExecuteRequest):
+    """Execute pandas code on CPU inside the E2B Sandbox for fair benchmarking."""
     try:
-        # Get the global dataframe
-        df = get_dataframe()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Data not loaded: {str(e)}")
-
-    start_time = time.perf_counter()
-    
-    # We capture stdout to get the result that the code prints
-    old_stdout = sys.stdout
-    redirected_output = sys.stdout = io.StringIO()
-    
-    try:
-        # Provide the dataframe in the local environment
-        local_env = {"df": df, "pd": __import__("pandas")}
-        exec(request.code, local_env)
-        execution_time = time.perf_counter() - start_time
-        
-        # Parse the printed output
-        output_str = redirected_output.getvalue().strip()
-        results = []
-        if output_str:
-            try:
-                parsed = json.loads(output_str)
-                results = parsed if isinstance(parsed, list) else [parsed]
-            except json.JSONDecodeError:
-                results = [{"raw_output": output_str}]
-                
-        return ExecuteCpuResponse(
-            execution_time_sec=execution_time,
-            status="success",
-            results=results
+        response_data = execute_on_cpu(request.code)
+        return ExecuteResponse(
+            execution_time_sec=response_data["execution_time_sec"],
+            results=response_data["results"],
+            logs=response_data["logs"],
+            status="success"
         )
     except Exception as e:
-        execution_time = time.perf_counter() - start_time
-        return ExecuteCpuResponse(
-            execution_time_sec=execution_time,
-            status=f"error: {str(e)}"
-        )
-    finally:
-        sys.stdout = old_stdout
+        raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/api/execute-gpu", response_model=ExecuteGpuResponse)
+@router.post("/api/execute-gpu", response_model=ExecuteResponse)
 def execute_gpu(request: ExecuteRequest):
+    """Execute cuDF code on GPU inside the E2B Sandbox for fair benchmarking."""
     try:
         response_data = execute_on_gpu(request.code)
-        return ExecuteGpuResponse(**response_data)
+        return ExecuteResponse(
+            execution_time_sec=response_data["execution_time_sec"],
+            results=response_data["results"],
+            logs=response_data["logs"],
+            status="success"
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

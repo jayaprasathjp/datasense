@@ -16,24 +16,24 @@ global_sandbox: Sandbox | None = None
 def init_sandbox() -> None:
     """
     Initializes a persistent E2B Sandbox, uploads the parquet file ONCE,
-    and pre-loads the cuDF DataFrame into the GPU memory so it's instantly 
-    ready for all future requests.
+    and pre-loads the data into BOTH cuDF (GPU) and pandas (CPU) DataFrames
+    so both backends are instantly ready for fair benchmarking.
     """
     global global_sandbox
     if global_sandbox is not None:
         return
         
-    logger.info("Initializing persistent E2B Sandbox (GPU)...")
+    logger.info("Initializing persistent E2B Sandbox...")
     global_sandbox = Sandbox.create(api_key=settings.e2b_api_key)
     
     if os.path.exists(PARQUET_FILE_PATH):
-        logger.info(f"Uploading massive parquet data to Sandbox ONCE...")
+        logger.info("Uploading parquet data to Sandbox ONCE...")
         with open(PARQUET_FILE_PATH, "rb") as f:
             global_sandbox.files.write("/home/user/data.parquet", f)
     else:
         logger.warning("Local parquet file not found. Sandbox will not have data.")
         
-    logger.info("Pre-warming GPU and loading data into cuDF DataFrame in the Sandbox memory...")
+    logger.info("Pre-warming: loading data into BOTH cuDF (GPU) and pandas (CPU)...")
     setup_code = """
 import sys
 import subprocess
@@ -43,49 +43,73 @@ try:
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pyarrow"], stdout=subprocess.DEVNULL)
 
+import pandas as pd
+import json
+import numpy as np
+
+# Load into pandas (CPU) — stored as `pdf`
+print("Loading data into pandas (CPU)...", file=sys.stderr)
+pdf = pd.read_parquet('/home/user/data.parquet')
+print(f"Loaded {len(pdf)} rows into pandas.", file=sys.stderr)
+
+# Load into cuDF (GPU) — stored as `gdf`
 try:
     import cudf
-    import json
-    import numpy as np
-    print("Loading data into GPU memory...", file=sys.stderr)
-    df = cudf.read_parquet('/home/user/data.parquet')
-    print(f"Loaded {len(df)} rows into cuDF.", file=sys.stderr)
+    print("Loading data into cuDF (GPU)...", file=sys.stderr)
+    gdf = cudf.read_parquet('/home/user/data.parquet')
+    print(f"Loaded {len(gdf)} rows into cuDF.", file=sys.stderr)
 except Exception as e:
-    print(f"Error during Sandbox initialization: {e}", file=sys.stderr)
+    print(f"cuDF not available: {e}", file=sys.stderr)
+    gdf = None
 """
     execution = global_sandbox.run_code(setup_code)
     if execution.error:
         logger.error(f"Failed to pre-warm sandbox: {execution.error}")
     else:
-        logger.info("Sandbox pre-warmed and ready.")
+        logger.info("Sandbox pre-warmed and ready (both CPU and GPU data loaded).")
 
 
-def execute_on_gpu(user_code: str) -> dict:
+def execute_in_sandbox(user_code: str, mode: str = "gpu") -> dict:
     """
-    Executes the given cuDF code securely on the pre-warmed E2B Sandbox.
+    Executes code inside the persistent E2B Sandbox.
+    
+    mode="gpu" → sets df = gdf (cuDF DataFrame) before running user code
+    mode="cpu" → sets df = pdf (pandas DataFrame) before running user code
+    
+    This ensures a fair apples-to-apples comparison where the ONLY difference
+    is the DataFrame engine, not network overhead.
     """
     global global_sandbox
     logs = []
     
-    start_time = time.perf_counter()
-    
     if global_sandbox is None:
         logs.append("Sandbox was not initialized. Initializing now...")
         init_sandbox()
-        
+    
+    # Pick the right DataFrame based on mode
+    if mode == "gpu":
+        df_assign = "df = gdf"
+        logs.append("Mode: GPU (cuDF)")
+    else:
+        df_assign = "df = pdf"
+        logs.append("Mode: CPU (pandas)")
+
     current_code = user_code
     retry_count = 0
     final_results = None
     pure_exec_time = None
     
     while retry_count < MAX_RETRIES:
-        logger.info(f"Executing code on Sandbox (Attempt {retry_count + 1})...")
+        logger.info(f"Executing {mode.upper()} code on Sandbox (Attempt {retry_count + 1})...")
         logs.append(f"Executing attempt {retry_count + 1}...")
         
-        # Wrap the code to measure the exact millisecond execution time strictly inside the VM
+        # Wrap user code with:
+        # 1. df assignment (pandas or cuDF)
+        # 2. Internal timer that measures PURE execution time
         wrapper_code = f"""
 import time
 import sys
+{df_assign}
 __e2b_start = time.perf_counter()
 try:
     exec({repr(current_code)})
@@ -101,14 +125,12 @@ finally:
             logger.warning(f"Execution Error: {error_msg}")
             logs.append(f"Execution Error: {error_msg}")
             
-            # Fallback logic to fix the code
             if retry_count < MAX_RETRIES - 1:
                 logger.info("Falling back to LLM to fix code...")
                 logs.append("Falling back to LLM to fix code...")
                 current_code = fix_code(current_code, error_msg)
             retry_count += 1
         else:
-            # Execution successful
             logger.info("Execution successful.")
             logs.append("Execution successful.")
             
@@ -139,17 +161,16 @@ finally:
         logs.append("Max retries reached. Failed to execute code successfully.")
         final_results = []
 
-    # Note: We NO LONGER kill the sandbox here, so it stays alive for the next request!
-    # global_sandbox.kill()
-
-    end_time = time.perf_counter()
-    overall_time = end_time - start_time
-    
-    # Use pure_exec_time if we successfully intercepted it, otherwise fallback to overall time
-    final_time = pure_exec_time if pure_exec_time is not None else overall_time
-    
     return {
-        "execution_time_sec": final_time,
+        "execution_time_sec": pure_exec_time if pure_exec_time is not None else 0.0,
         "results": final_results if isinstance(final_results, list) else [final_results],
         "logs": logs
     }
+
+
+# Convenience wrappers
+def execute_on_gpu(user_code: str) -> dict:
+    return execute_in_sandbox(user_code, mode="gpu")
+
+def execute_on_cpu(user_code: str) -> dict:
+    return execute_in_sandbox(user_code, mode="cpu")

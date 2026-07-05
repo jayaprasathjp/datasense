@@ -61,27 +61,41 @@ SYSTEM_PROMPT_CUDF = (
     "- You MUST output the result as a valid JSON string using `json.dumps()`.\n"
     "- Ensure you convert any numpy data types (like np.float64) to native Python types (float, int) before calling json.dumps(), otherwise it will fail to serialize.\n"
     "- Example: `import json; print(json.dumps({'result': float(final_value)}))`\n"
-    "- Follow the cheat-sheet above exactly — no pandas, no sklearn."
+    "- Follow the cheat-sheet above exactly — no pandas, no sklearn.\n"
+    "- NEVER generate comments about dummy data or create a dummy DataFrame. Assume `df` is already in memory."
 )
 
+
 def _call_modal(system_prompt: str, user_prompt: str) -> str:
-    """Helper to send prompt to the Modal serverless inference endpoint."""
-    if not settings.modal_url:
-        raise ValueError("MODAL_URL is not set in the environment variables.")
+    """Helper to send prompt to the Modal vLLM serverless inference endpoint."""
+    if not settings.modal_url or not settings.modal_api_key:
+        raise ValueError("MODAL_URL or MODAL_API_KEY is not set in the environment variables.")
         
     logger.info(f"Sending prompt to Modal LLM Endpoint: {settings.modal_url}")
-    payload = {
-        "system_prompt": system_prompt,
-        "user_prompt": user_prompt
+    
+    headers = {
+        "Authorization": f"Bearer {settings.modal_api_key}",
+        "Content-Type": "application/json"
     }
     
-    # We use a long timeout since Modal might have to cold-start (pull the 4GB model)
-    with httpx.Client(timeout=300.0) as client:
-        resp = client.post(settings.modal_url, json=payload)
+    payload = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "max_new_tokens": 512,
+        "temperature": 0.2
+    }
+    
+    # We use a long timeout since Modal might have to cold-start
+    # Modal uses 303 Redirects for long-running executions, so follow_redirects=True is required
+    with httpx.Client(timeout=300.0, follow_redirects=True) as client:
+        resp = client.post(settings.modal_url, headers=headers, json=payload)
         resp.raise_for_status()
-        result_text = resp.json().get("result", "")
+        result_text = resp.json()["choices"][0]["message"]["content"]
         
     return result_text
+
 
 def _extract_code(text: str) -> str:
     code = text.strip()
@@ -91,6 +105,17 @@ def _extract_code(text: str) -> str:
         code = code[3:]
     if code.endswith("```"):
         code = code[:-3]
+    
+    # LLMs occasionally capitalize cuDF, which breaks the python import (it must be all lowercase 'cudf')
+    code = code.replace("cuDF", "cudf")
+    
+    # Forcefully strip out any dummy dataframe generation so it doesn't overwrite our real `df`
+    import re
+    # Remove multiline data = { ... } blocks
+    code = re.sub(r'data\s*=\s*\{.*?\}', '', code, flags=re.DOTALL)
+    # Remove df = cudf.DataFrame(...) or pd.DataFrame(...)
+    code = re.sub(r'df\s*=\s*(cudf|pd)\.DataFrame\(.*?\)', '', code, flags=re.DOTALL)
+    
     return code.strip()
 
 def synthesize_code(query: str, task_type: str = "data_analysis") -> str:

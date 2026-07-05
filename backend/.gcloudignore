@@ -1,0 +1,12 @@
+.gcloudignore
+.git
+.gitignore
+.dockerignore
+venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+*.json
+*.parquet
+.vscode/

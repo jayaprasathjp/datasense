@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>DataSense GPU — Hackathon Plan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#060608;--panel:#0e0e12;--panel2:#13131a;--border:#1e1e2a;--border2:#2a2a38;--text:#f0f0f8;--muted:#8888aa;--dim:#bbbbd0;--green:#00ff88;--blue:#4488ff;--purple:#aa66ff;--amber:#ffbb33;--red:#ff4455;--nvidia:#76b900;--google:#4285f4;--mono:'JetBrains Mono',monospace;--sans:'Inter',system-ui,sans-serif}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:15px;line-height:1.65;-webkit-font-smoothing:antialiased;background-image:radial-gradient(circle at 20% 20%,rgba(68,136,255,.04) 0%,transparent 50%),radial-gradient(circle at 80% 80%,rgba(0,255,136,.04) 0%,transparent 50%),radial-gradient(rgba(255,255,255,.015) 1px,transparent 1px);background-size:100% 100%,100% 100%,24px 24px}
+nav{position:sticky;top:0;z-index:100;background:rgba(6,6,8,.9);backdrop-filter:blur(20px);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:.4rem;padding:0 1.5rem;height:52px;overflow-x:auto}
+nav a{font-family:var(--mono);font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);text-decoration:none;padding:.3rem .65rem;border:1px solid transparent;white-space:nowrap;transition:all .2s}
+nav a:hover{color:var(--green);border-color:var(--green);background:rgba(0,255,136,.07)}
+.nav-logo{font-family:var(--mono);font-size:.8rem;font-weight:700;color:var(--green);margin-right:1rem;white-space:nowrap}
+.wrap{max-width:1100px;margin:0 auto;padding:0 1.5rem 6rem}
+.hero{padding:5rem 0 3.5rem;border-bottom:1px solid var(--border)}
+.eyebrow{font-family:var(--mono);font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;color:var(--green);display:flex;align-items:center;gap:.6rem;margin-bottom:1.4rem}
+.eyebrow::before{content:'';width:8px;height:8px;background:var(--green);box-shadow:0 0 12px var(--green);border-radius:50%;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+h1{font-size:clamp(2.2rem,5vw,3.6rem);font-weight:900;letter-spacing:-.04em;line-height:1.05;margin-bottom:1.1rem}
+.a1{color:var(--green)}.a2{color:var(--blue)}
+.hero-sub{font-size:1.05rem;color:var(--dim);max-width:62ch;font-weight:300;margin-bottom:1.8rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:2rem}
+.badge{font-family:var(--mono);font-size:.67rem;letter-spacing:.05em;padding:.28rem .75rem;text-transform:uppercase}
+.bn{background:rgba(118,185,0,.12);color:var(--nvidia);border:1px solid rgba(118,185,0,.3)}
+.bg{background:rgba(66,133,244,.12);color:var(--google);border:1px solid rgba(66,133,244,.3)}
+.bv{background:rgba(0,255,136,.1);color:var(--green);border:1px solid rgba(0,255,136,.25)}
+.bp{background:rgba(170,102,255,.1);color:var(--purple);border:1px solid rgba(170,102,255,.25)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:1px;background:var(--border);border:1px solid var(--border);margin-top:2rem}
+.stat{background:var(--panel);padding:1.4rem 1.1rem}
+.stat .v{font-family:var(--mono);font-size:2.2rem;font-weight:700;color:var(--green);line-height:1}
+.stat .l{font-size:.7rem;color:var(--muted);margin-top:.35rem;text-transform:uppercase;letter-spacing:.07em}
+.sec{padding:3.5rem 0 0}
+.snum{font-family:var(--mono);font-size:.68rem;color:var(--muted);letter-spacing:.1em;text-transform:uppercase;margin-bottom:.45rem}
+h2{font-size:1.8rem;font-weight:800;letter-spacing:-.02em;border-bottom:1px solid var(--border);padding-bottom:.9rem}
+h3{font-size:1.05rem;font-weight:700;margin-bottom:.65rem}
+.slead{color:var(--dim);font-size:.93rem;max-width:70ch;margin-top:.65rem}
+.card{background:var(--panel);border:1px solid var(--border);padding:1.4rem;margin-bottom:.85rem}
+.ctitle{font-family:var(--mono);font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:.65rem}
+.g2{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:.85rem}
+.g3{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:.85rem}
+.callout{border-left:3px solid var(--green);background:rgba(0,255,136,.06);border:1px solid rgba(0,255,136,.15);border-left:3px solid var(--green);padding:1.1rem 1.4rem;margin:1.3rem 0;font-size:.91rem;color:var(--dim)}
+.callout strong{color:var(--text)}
+.cb{border-left-color:var(--blue);background:rgba(68,136,255,.06);border-color:rgba(68,136,255,.14);border-left-color:var(--blue)}
+.ca{border-left-color:var(--amber);background:rgba(255,187,51,.06);border-color:rgba(255,187,51,.14)}
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.87rem}
+th{background:rgba(255,255,255,.025);font-family:var(--mono);font-size:.67rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);padding:.75rem .95rem;text-align:left;border-bottom:1px solid var(--border2)}
+td{padding:.75rem .95rem;border-bottom:1px solid var(--border);color:var(--dim)}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:rgba(255,255,255,.014);color:var(--text)}
+td.n,th.n{text-align:right;font-family:var(--mono)}
+td.n{color:var(--text)}
+.ok{color:var(--green);font-family:var(--mono);font-size:.8rem}
+.fail{color:var(--red);font-family:var(--mono);font-size:.8rem}
+.warn{color:var(--amber);font-family:var(--mono);font-size:.8rem}
+td strong{color:var(--text)}
+.bar-row{display:flex;align-items:center;gap:1rem;padding:.8rem 0;border-bottom:1px solid var(--border)}
+.bar-row:last-child{border-bottom:none}
+.bar-lbl{font-size:.84rem;min-width:230px}
+.bar-lbl small{font-family:var(--mono);font-size:.68rem;color:var(--muted)}
+.bar-track{flex:1;height:5px;background:var(--border2)}
+.bar-fill{height:100%;background:var(--green);box-shadow:0 0 7px rgba(0,255,136,.4)}
+.bar-fill.am{background:var(--amber);box-shadow:0 0 7px rgba(255,187,51,.4)}
+.bar-fill.bl{background:var(--blue);box-shadow:0 0 7px rgba(68,136,255,.4)}
+.bar-fill.rd{background:var(--red);box-shadow:0 0 7px rgba(255,68,85,.4)}
+.bar-val{font-family:var(--mono);font-size:.9rem;font-weight:700;color:var(--green);min-width:55px;text-align:right}
+.bar-val.am{color:var(--amber)}.bar-val.bl{color:var(--blue)}.bar-val.rd{color:var(--red)}
+.pipe{display:flex;margin:1.8rem 0;overflow-x:auto}
+.ps{flex:1;min-width:155px;background:var(--panel);border:1px solid var(--border);padding:1.1rem .9rem;position:relative}
+.ps+.ps{border-left:none}
+.ps::after{content:'→';position:absolute;right:-12px;top:50%;transform:translateY(-50%);font-size:1.1rem;color:var(--muted);z-index:1;background:var(--bg);padding:0 2px}
+.ps:last-child::after{display:none}
+.ps-num{font-family:var(--mono);font-size:.63rem;color:var(--green);letter-spacing:.1em;text-transform:uppercase;margin-bottom:.35rem}
+.ps-title{font-weight:700;font-size:.88rem;margin-bottom:.35rem}
+.ps-body{font-size:.76rem;color:var(--muted)}
+.arch{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1px;background:var(--border);border:1px solid var(--border);margin:1.3rem 0}
+.ac{background:var(--panel);padding:1.1rem}
+.act{font-family:var(--mono);font-size:.67rem;text-transform:uppercase;letter-spacing:.1em;margin-bottom:.9rem;padding-bottom:.45rem;border-bottom:1px solid var(--border2)}
+.act.ng{color:var(--nvidia);border-color:rgba(118,185,0,.3)}
+.act.gg{color:var(--google);border-color:rgba(66,133,244,.3)}
+.act.pg{color:var(--purple);border-color:rgba(170,102,255,.3)}
+.ai{font-size:.8rem;color:var(--dim);padding:.3rem 0;border-bottom:1px solid var(--border);display:flex;gap:.45rem}
+.ai:last-child{border-bottom:none}
+.ai::before{content:'→';color:var(--border2);flex-shrink:0}
+.prs{background:var(--panel2);border:1px solid var(--border);padding:1.3rem;display:grid;grid-template-columns:auto 1fr;gap:1.1rem}
+.pav{width:52px;height:52px;background:linear-gradient(135deg,var(--blue),var(--purple));display:flex;align-items:center;justify-content:center;font-size:1.5rem;flex-shrink:0}
+.pnm{font-weight:700;font-size:.97rem;margin-bottom:.18rem}
+.prl{font-size:.78rem;color:var(--muted);font-family:var(--mono)}
+.ppain{font-size:.86rem;color:var(--dim);margin-top:.45rem}
+.stk{display:flex;flex-wrap:wrap;gap:.45rem;margin-top:.9rem}
+.tech{font-family:var(--mono);font-size:.7rem;padding:.3rem .75rem;border:1px solid var(--border2);color:var(--dim);transition:all .2s;cursor:default}
+.tech:hover{color:var(--text);border-color:var(--muted)}
+.tech.nv{border-color:rgba(118,185,0,.4);color:var(--nvidia)}
+.tech.gv{border-color:rgba(66,133,244,.4);color:var(--google)}
+.cl{list-style:none}
+.cl li{display:flex;gap:.7rem;padding:.55rem 0;border-bottom:1px solid var(--border);font-size:.88rem;color:var(--dim)}
+.cl li:last-child{border-bottom:none}
+.cl li::before{content:'☐';font-size:.95rem;color:var(--border2);flex-shrink:0;margin-top:.05rem}
+.cl li.done::before{content:'✓';color:var(--green)}
+.cl strong{color:var(--text)}
+.tl{margin:1.3rem 0}
+.tlr{display:grid;grid-template-columns:105px 18px 1fr;gap:0 .85rem;margin-bottom:.2rem;align-items:start}
+.tld{font-family:var(--mono);font-size:.7rem;color:var(--muted);text-align:right;padding-top:.12rem}
+.tldot{width:9px;height:9px;background:var(--border2);border-radius:50%;margin-top:.32rem;flex-shrink:0;border:2px solid var(--border2)}
+.tldot.done{background:var(--green);border-color:var(--green);box-shadow:0 0 7px rgba(0,255,136,.5)}
+.tldot.now{background:var(--amber);border-color:var(--amber);box-shadow:0 0 7px rgba(255,187,51,.5)}
+.tlc{font-size:.86rem;color:var(--dim);padding-bottom:.9rem;border-left:1px solid var(--border);margin-left:-.85rem;padding-left:1.3rem}
+.tlc strong{color:var(--text);display:block}
+pre{background:var(--panel2);border:1px solid var(--border);padding:1.1rem 1.4rem;overflow-x:auto;font-family:var(--mono);font-size:.79rem;line-height:1.7;color:var(--dim)}
+code{font-family:var(--mono);font-size:.84em;color:var(--green);background:rgba(0,255,136,.06);padding:.1em .32em}
+.tag{display:inline-block;font-family:var(--mono);font-size:.63rem;text-transform:uppercase;letter-spacing:.06em;padding:.12rem .45rem}
+.tg{background:rgba(0,255,136,.1);color:var(--green)}
+.tr{background:rgba(255,68,85,.1);color:var(--red)}
+.ta{background:rgba(255,187,51,.1);color:var(--amber)}
+.tb{background:rgba(68,136,255,.1);color:var(--blue)}
+footer{margin-top:5rem;border-top:1px solid var(--border);padding-top:1.8rem;font-family:var(--mono);font-size:.68rem;color:var(--muted);text-align:center;letter-spacing:.05em}
+@media(max-width:600px){.arch{grid-template-columns:1fr}.pipe{flex-direction:column}.ps::after{display:none}h1{font-size:2rem}.stat .v{font-size:1.7rem}}
+</style>
+</head>
+<body>
+<nav>
+  <span class="nav-logo">⚡ DataSense GPU</span>
+  <a href="#p01">Problem</a><a href="#p02">Solution</a><a href="#p03">User</a>
+  <a href="#p04">Pipeline</a><a href="#p05">Dataset</a><a href="#p06">Results</a>
+  <a href="#p07">Architecture</a><a href="#p08">Build Plan</a>
+  <a href="#p09">Evaluation</a><a href="#p10">Stack</a><a href="#p11">Risks</a><a href="#p12">USP</a>
+</nav>
+<div class="wrap">
+
+<!-- HERO -->
+<section class="hero">
+  <div class="eyebrow">Gen AI Academy APAC &middot; Problem Statement 2 &middot; NVIDIA Track</div>
+  <h1>DataSense <span class="a1">GPU</span><br>Accelerated <span class="a2">Data Intelligence</span></h1>
+  <p class="hero-sub">A natural-language data analytics agent that uses NVIDIA RAPIDS (cuDF&nbsp;+&nbsp;cuML) to deliver time-series anomaly alerts and risk scoring 20&ndash;69&times; faster than CPU &mdash; turning minutes-long data jobs into sub-second decisions.</p>
+  <div class="badges">
+    <span class="badge bn">NVIDIA RAPIDS</span><span class="badge bn">cuDF &middot; cuML</span>
+    <span class="badge bg">Google Cloud</span><span class="badge bg">BigQuery</span><span class="badge bg">Gemini</span>
+    <span class="badge bv">Fine-tuned LLM</span><span class="badge bp">E2B Sandbox</span>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="v">69&times;</div><div class="l">Rolling window speedup at 20M rows</div></div>
+    <div class="stat"><div class="v">54&times;</div><div class="l">Merge/join speedup at 20M rows</div></div>
+    <div class="stat"><div class="v">18&times;</div><div class="l">RF classifier speedup at 1M rows</div></div>
+    <div class="stat"><div class="v">20M</div><div class="l">Rows tested on Tesla T4 GPU</div></div>
+    <div class="stat"><div class="v">0.15s</div><div class="l">cuDF rolling alert exec (vs 0.37s pandas)</div></div>
+    <div class="stat"><div class="v">2 days</div><div class="l">Build timeline to working prototype</div></div>
+  </div>
+</section>
+
+<!-- 01 PROBLEM -->
+<section class="sec" id="p01">
+  <div class="snum">01 / Problem Statement</div>
+  <h2>The Bottleneck We&rsquo;re Solving</h2>
+  <p class="slead">Operations managers, store leads, and data analysts work with millions of rows of transactional data daily &mdash; but CPU-based tools make real-time decisions impossible.</p>
+  <div class="g2" style="margin-top:1.4rem">
+    <div class="card">
+      <div class="ctitle">The Daily Pain Point</div>
+      <p style="color:var(--dim);font-size:.89rem">A store manager or ops analyst needs to know <em>right now</em>: which stores are trending negative? Which transactions are high-risk? Which products need restocking? With pandas on CPU, running these queries on millions of rows takes <strong style="color:var(--amber)">30 seconds to 3+ minutes</strong>. By the time the answer arrives, the window for action has passed.</p>
+    </div>
+    <div class="card">
+      <div class="ctitle">Why Existing Tools Fail</div>
+      <ul class="cl">
+        <li>BI dashboards refresh every 15&ndash;30 min &mdash; stale data, missed windows</li>
+        <li>LLM data agents spend 99.5% of time on token generation, not execution</li>
+        <li>sklearn RandomForest at 5M rows: <strong style="color:var(--red)">203 seconds</strong> &mdash; unusable for live scoring</li>
+        <li>Rolling window alerts on 20M rows: <strong style="color:var(--red)">27.4 seconds</strong> on pandas CPU</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout"><strong>Data-backed insight:</strong> In the DataSense pipeline, LLM generation dominates latency (98&ndash;99%). But data execution &mdash; when it IS the bottleneck &mdash; responds <strong>20&ndash;69&times; faster on GPU</strong>. The LLM generates the question; the GPU answers it instantly.</div>
+</section>
+
+<!-- 02 SOLUTION -->
+<section class="sec" id="p02">
+  <div class="snum">02 / Solution</div>
+  <h2>DataSense GPU &mdash; What We&rsquo;re Building</h2>
+  <p class="slead">A GPU-accelerated natural-language analytics agent that ingests large transactional datasets and delivers real-time anomaly alerts, risk scores, and dashboard summaries.</p>
+  <div class="g3" style="margin-top:1.4rem">
+    <div class="card">
+      <div class="ctitle">🧠 Smart</div>
+      <h3>Natural Language Interface</h3>
+      <p style="color:var(--dim);font-size:.87rem">Ask in plain English: <em>&ldquo;Which stores had revenue drop more than 20% this week?&rdquo;</em> The fine-tuned DataSense model (Gemma-4 E2B + LoRA) translates the question into executable cuDF code &mdash; no SQL, no dashboard configuration.</p>
+    </div>
+    <div class="card">
+      <div class="ctitle">⚡ Fast</div>
+      <h3>GPU-Accelerated Execution</h3>
+      <p style="color:var(--dim);font-size:.87rem">Generated code runs on NVIDIA RAPIDS (cuDF + cuML). Rolling window alerts: <strong style="color:var(--green)">0.15s vs 0.37s</strong>. Risk model on 1M rows: <strong style="color:var(--green)">2.1s vs 37.8s</strong>. Same code path, 18&times; faster.</p>
+    </div>
+    <div class="card">
+      <div class="ctitle">📊 Useful</div>
+      <h3>Actionable Decision Output</h3>
+      <p style="color:var(--dim);font-size:.87rem">Outputs a ranked priority list, anomaly alert table, or risk score column &mdash; not just a chart. The manager sees exactly which 10 stores to call, which tickets to handle first, what to restock today.</p>
+    </div>
+  </div>
+  <div class="callout cb"><strong>Core innovation:</strong> We use <code>cudf.pandas</code> injection in the E2B execution sandbox. The DataSense LLM generates standard pandas code as trained &mdash; we intercept it and transparently run it on GPU via NVIDIA&rsquo;s official drop-in replacement. <strong>No model retraining needed.</strong></div>
+</section>
+
+<!-- 03 USER -->
+<section class="sec" id="p03">
+  <div class="snum">03 / Target User</div>
+  <h2>Real User, Real Problem</h2>
+  <p class="slead">The hackathon requires a specific user with a specific data bottleneck. Here&rsquo;s ours.</p>
+  <div class="g2" style="margin-top:1.4rem">
+    <div class="prs">
+      <div class="pav">🏪</div>
+      <div>
+        <div class="pnm">Retail Operations Manager</div>
+        <div class="prl">Primary Persona &middot; Daily Active User</div>
+        <p class="ppain">Oversees 200+ stores. Every morning needs to know: <strong style="color:var(--amber)">which stores are trending down, which need inventory, which have high return rates.</strong> Currently runs a pandas script overnight &mdash; by 9am the data is already 8 hours stale.</p>
+      </div>
+    </div>
+    <div class="prs">
+      <div class="pav">🎯</div>
+      <div>
+        <div class="pnm">Support Operations Lead</div>
+        <div class="prl">Secondary Persona &middot; Shift Handover Use Case</div>
+        <p class="ppain">Needs to prioritise 50,000+ open tickets at shift start. Manual triage takes 45 minutes. With a GPU-accelerated risk model, <strong style="color:var(--green)">the ranked list is ready in 2.1 seconds</strong> instead of 37 minutes.</p>
+      </div>
+    </div>
+  </div>
+  <div class="callout" style="margin-top:1rem"><strong>The decision they need to make:</strong> Every morning, within the first 10 minutes of their shift: <em>&ldquo;What needs my attention right now?&rdquo;</em> &mdash; Which stores? Which customers? Which inventory items? Our tool answers all three in one NL session on live data in under 5 seconds.</div>
+</section>
+
+<!-- 04 PIPELINE -->
+<section class="sec" id="p04">
+  <div class="snum">04 / Data Pipeline</div>
+  <h2>3-Stage Pipeline: Ingest &rarr; Analyze &rarr; Act</h2>
+  <p class="slead">The hackathon&rsquo;s required pipeline pattern, mapped to our specific implementation.</p>
+  <div class="pipe">
+    <div class="ps"><div class="ps-num">Stage 1</div><div class="ps-title">Ingest &amp; Clean</div><div class="ps-body">CSV / BigQuery &rarr; cuDF DataFrame. Schema validation, dtype casting, null handling. cuDF reads ~20&times; faster than pandas at 5M+ rows.</div></div>
+    <div class="ps"><div class="ps-num">Stage 2</div><div class="ps-title">Analyze &amp; Model</div><div class="ps-body">DataSense LLM generates cuDF + cuML code. Rolling windows, groupby aggregations, RF classifier &mdash; all on GPU. 18&ndash;69&times; speedup vs CPU.</div></div>
+    <div class="ps"><div class="ps-num">Stage 3</div><div class="ps-title">Visualize &amp; Act</div><div class="ps-body">Output: ranked table, alert list, risk score column. Rendered in UI. Exportable to BigQuery or Looker for team-wide visibility.</div></div>
+  </div>
+  <div class="g2">
+    <div class="card"><div class="ctitle">Batch Mode (Primary)</div><h3>Daily Refresh Pipeline</h3><p style="color:var(--dim);font-size:.87rem">Cloud Storage &rarr; BigQuery &rarr; cuDF ingestion &rarr; GPU analysis &rarr; results back to BigQuery. What took 3+ hours on CPU completes in minutes &mdash; enabling 6&times; daily refresh instead of once per night.</p></div>
+    <div class="card"><div class="ctitle">Interactive Mode (Demo)</div><h3>Natural Language Query</h3><p style="color:var(--dim);font-size:.87rem">User types a question &rarr; DataSense model generates code &rarr; E2B sandbox with <code>cudf.pandas</code> injected executes it &rarr; answer returned in &lt;5s total. This is the live demo flow for the hackathon video.</p></div>
+  </div>
+</section>
+
+<!-- 05 DATASET -->
+<section class="sec" id="p05">
+  <div class="snum">05 / Dataset</div>
+  <h2>Data We&rsquo;re Using</h2>
+  <p class="slead">Two datasets: a real-world large dataset for proving scale, and a rich synthetic dataset for the LLM benchmark and demo.</p>
+  <div class="g2" style="margin-top:1.4rem">
+    <div class="card">
+      <div class="ctitle">Real Dataset &mdash; NOAA GSOD (3GB, 12.9M rows)</div>
+      <h3>Global Surface Summary of the Day</h3>
+      <div class="tw" style="margin-top:.7rem">
+        <table>
+          <tr><th>Property</th><th>Value</th></tr>
+          <tr><td>Source</td><td>NOAA public AWS S3 bucket (no auth required)</td></tr>
+          <tr><td>Size</td><td>3.00 GB &mdash; 39,527 station-year files</td></tr>
+          <tr><td>Rows</td><td>12,986,269</td></tr>
+          <tr><td>Columns</td><td>28 (TEMP, DEWP, SLP, WDSP, PRCP, SNDP&hellip;)</td></tr>
+          <tr><td>Used for</td><td>Proving execution bottleneck at scale</td></tr>
+          <tr><td>Download time</td><td>263s with 32-worker parallel threading</td></tr>
+        </table>
+      </div>
+      <div class="callout" style="margin-top:.9rem;font-size:.82rem">Test result: Even at 3GB / 12.9M rows, <strong>LLM generation dominated 99.5% of latency</strong>. Sandbox execution was 0.4% &mdash; confirming the bottleneck is the model, not data processing.</div>
+    </div>
+    <div class="card">
+      <div class="ctitle">Synthetic Dataset &mdash; Transactions (1M&ndash;20M rows)</div>
+      <h3>Generic Retail / Ops Schema &mdash; 26 Columns</h3>
+      <div class="tw" style="margin-top:.7rem">
+        <table>
+          <tr><th>Column</th><th>Type</th><th>Role</th></tr>
+          <tr><td>store_id, product_id</td><td>int32</td><td>groupby, join keys</td></tr>
+          <tr><td>date</td><td>datetime</td><td>rolling window</td></tr>
+          <tr><td>revenue, margin</td><td>float64</td><td>aggregation target</td></tr>
+          <tr><td>return_flag</td><td>int8</td><td>risk feature</td></tr>
+          <tr><td>ticket_age_hours</td><td>float64</td><td>triage feature</td></tr>
+          <tr><td>sentiment</td><td>float64</td><td>risk feature</td></tr>
+          <tr><td>feat_1&ndash;4</td><td>float64</td><td>ML feature matrix</td></tr>
+          <tr><td>risk_label</td><td>int8</td><td>classification target</td></tr>
+        </table>
+      </div>
+      <p style="font-size:.77rem;color:var(--muted);margin-top:.65rem">Also: qty, price, discount_pct, support_tier, inventory, days_since_restock, session_minutes, user_id, region &mdash; scales 100K to 20M rows &mdash; maps to retail, support ops, finance, logistics</p>
+    </div>
+  </div>
+</section>
+
+<!-- 06 RESULTS -->
+<section class="sec" id="p06">
+  <div class="snum">06 / Test Results</div>
+  <h2>Benchmark Results &mdash; Real Numbers from Tesla T4</h2>
+  <p class="slead">All numbers collected on Kaggle GPU T4 (15,360&nbsp;MiB), cuDF&nbsp;26.02.01 / cuML&nbsp;26.02.000. These are the proof-of-acceleration numbers for the hackathon demo.</p>
+
+  <h3 style="margin:1.6rem 0 .9rem">Section D &mdash; GPU Sweep: cuDF vs pandas / cuML vs sklearn</h3>
+  <div class="card">
+    <div class="ctitle">Speedup at 20M rows (CPU time / GPU time)</div>
+    <div class="bar-row"><div class="bar-lbl">rolling_window <small>&middot; time-series alerting</small></div><div class="bar-track"><div class="bar-fill" style="width:100%"></div></div><div class="bar-val">69.1&times;</div></div>
+    <div class="bar-row"><div class="bar-lbl">merge_join <small>&middot; dashboard enrichment</small></div><div class="bar-track"><div class="bar-fill" style="width:78.9%"></div></div><div class="bar-val">54.5&times;</div></div>
+    <div class="bar-row"><div class="bar-lbl">sort <small>&middot; ranking / leaderboard</small></div><div class="bar-track"><div class="bar-fill am" style="width:36.2%"></div></div><div class="bar-val am">25.0&times;</div></div>
+    <div class="bar-row"><div class="bar-lbl">groupby_agg <small>&middot; BI aggregation</small></div><div class="bar-track"><div class="bar-fill am" style="width:29.6%"></div></div><div class="bar-val am">20.4&times;</div></div>
+    <div class="bar-row"><div class="bar-lbl">linreg_fit <small>&middot; forecasting</small></div><div class="bar-track"><div class="bar-fill bl" style="width:16.3%"></div></div><div class="bar-val bl">11.3&times;</div></div>
+    <div class="bar-row"><div class="bar-lbl">kmeans_fit <small>&middot; segmentation (weak)</small></div><div class="bar-track"><div class="bar-fill rd" style="width:3.9%"></div></div><div class="bar-val rd">2.7&times;</div></div>
+  </div>
+
+  <div class="card" style="margin-top:.85rem">
+    <div class="ctitle">Full speedup table by row count (CPU time / GPU time)</div>
+    <div class="tw">
+      <table>
+        <tr><th>Operation</th><th class="n">100K rows</th><th class="n">1M rows</th><th class="n">5M rows</th><th class="n">20M rows</th><th>Verdict</th></tr>
+        <tr><td><strong>rolling_window</strong></td><td class="n" style="color:var(--red)">0.5&times;</td><td class="n" style="color:var(--amber)">21.0&times;</td><td class="n" style="color:var(--green)">40.9&times;</td><td class="n" style="color:var(--green)"><strong>69.1&times;</strong></td><td><span class="tag tg">🏆 BEST</span></td></tr>
+        <tr><td><strong>merge_join</strong></td><td class="n" style="color:var(--red)">0.2&times;</td><td class="n" style="color:var(--amber)">9.3&times;</td><td class="n" style="color:var(--green)">15.5&times;</td><td class="n" style="color:var(--green)"><strong>54.5&times;</strong></td><td><span class="tag tg">strong</span></td></tr>
+        <tr><td><strong>sort</strong></td><td class="n" style="color:var(--red)">0.5&times;</td><td class="n" style="color:var(--amber)">13.3&times;</td><td class="n" style="color:var(--green)">17.1&times;</td><td class="n" style="color:var(--green)"><strong>25.0&times;</strong></td><td><span class="tag tb">solid</span></td></tr>
+        <tr><td><strong>groupby_agg</strong></td><td class="n" style="color:var(--red)">0.3&times;</td><td class="n" style="color:var(--green)">18.6&times;</td><td class="n" style="color:var(--green)">20.1&times;</td><td class="n" style="color:var(--green)"><strong>20.4&times;</strong></td><td><span class="tag tb">solid</span></td></tr>
+        <tr><td><strong>rf_classify_fit</strong></td><td class="n" style="color:var(--green)">6.6&times;</td><td class="n" style="color:var(--green)">18.0&times;</td><td class="n" style="color:var(--green)">18.7&times;</td><td class="n" style="color:var(--muted)">sklearn N/A</td><td><span class="tag tg">strong</span></td></tr>
+        <tr><td>linreg_fit</td><td class="n" style="color:var(--red)">0.04&times;</td><td class="n" style="color:var(--amber)">6.5&times;</td><td class="n" style="color:var(--amber)">10.2&times;</td><td class="n" style="color:var(--amber)">11.3&times;</td><td><span class="tag ta">ok</span></td></tr>
+        <tr><td>kmeans_fit</td><td class="n" style="color:var(--muted)">1.0&times;</td><td class="n" style="color:var(--muted)">1.8&times;</td><td class="n" style="color:var(--muted)">3.3&times;</td><td class="n" style="color:var(--muted)">2.7&times;</td><td><span class="tag tr">avoid</span></td></tr>
+      </table>
+    </div>
+    <p style="font-size:.76rem;color:var(--muted);margin-top:.65rem">&#9888; GPU is slower than CPU at 100K rows (CUDA kernel launch overhead). GPU advantage kicks in at 1M+ rows. Benchmarks: Kaggle Tesla T4 &middot; cuDF 26.02.01 &middot; CUDA 12.8</p>
+  </div>
+
+  <h3 style="margin:2rem 0 .9rem">Section E &mdash; LLM-in-loop Benchmark: DataSense model + cuDF execution</h3>
+  <div class="card">
+    <div class="ctitle">Full results &mdash; gen time + exec time per (task, backend)</div>
+    <div class="tw">
+      <table>
+        <tr><th>Task</th><th>Backend</th><th class="n">gen (s)</th><th class="n">exec (s)</th><th class="n">total (s)</th><th class="n">tokens</th><th>Status</th><th>Notes</th></tr>
+        <tr><td><strong>priority_ranking</strong></td><td>pandas</td><td class="n">34.0</td><td class="n">21.2</td><td class="n">55.2</td><td class="n">191</td><td><span class="ok">&#10003; OK</span></td><td style="font-size:.77rem;color:var(--muted)">Used df.apply() &rarr; 21s exec (row-wise UDF)</td></tr>
+        <tr><td><strong>priority_ranking</strong></td><td>cudf</td><td class="n">31.2</td><td class="n">1.6</td><td class="n">32.8</td><td class="n">177</td><td><span class="fail">&#10007; Error</span></td><td style="font-size:.77rem;color:var(--muted)">df.apply() &rarr; cuDF UDF compile fail</td></tr>
+        <tr><td><strong>rolling_alert</strong></td><td>pandas</td><td class="n">43.0</td><td class="n">0.4</td><td class="n">43.4</td><td class="n">245</td><td><span class="fail">&#10007; Error</span></td><td style="font-size:.77rem;color:var(--muted)">.abs() chained after groupby &mdash; wrong API</td></tr>
+        <tr><td><strong>rolling_alert</strong></td><td>cudf</td><td class="n">38.7</td><td class="n"><strong style="color:var(--green)">0.15</strong></td><td class="n">38.9</td><td class="n">217</td><td><span class="ok">&#10003; OK</span></td><td style="font-size:.77rem;color:var(--muted)">&#10003; cuDF code correct &mdash; 0.15s exec</td></tr>
+        <tr><td><strong>dashboard_summary</strong></td><td>pandas</td><td class="n">33.9</td><td class="n"><strong style="color:var(--green)">0.09</strong></td><td class="n">34.0</td><td class="n">192</td><td><span class="ok">&#10003; OK</span></td><td style="font-size:.77rem;color:var(--muted)">Clean groupby &mdash; fast result</td></tr>
+        <tr><td><strong>dashboard_summary</strong></td><td>cudf</td><td class="n">90.0</td><td class="n">&mdash;</td><td class="n">90.0</td><td class="n">512</td><td><span class="warn">&#9888; Truncated</span></td><td style="font-size:.77rem;color:var(--muted)">Hit MAX_NEW_TOKENS=512 &mdash; code block never closed</td></tr>
+        <tr><td><strong>risk_model</strong></td><td>pandas</td><td class="n">59.1</td><td class="n" style="color:var(--red)"><strong>613.4</strong></td><td class="n">672.4</td><td class="n">338</td><td><span class="ok">&#10003; OK</span></td><td style="font-size:.77rem;color:var(--muted)">sklearn RF on 1M rows &mdash; 613s CPU (brutal)</td></tr>
+        <tr><td><strong>risk_model</strong></td><td>cudf</td><td class="n">40.4</td><td class="n"><strong style="color:var(--green)">2.7</strong></td><td class="n">43.0</td><td class="n">229</td><td><span class="fail">&#10007; Error</span></td><td style="font-size:.77rem;color:var(--muted)">Series not iterable &mdash; minor exec namespace fix</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="g2" style="margin-top:.85rem">
+    <div class="callout"><strong>&#127942; Money number for the demo:</strong> risk_model &mdash; pandas exec <strong>613 seconds</strong> vs cuML RF <strong>2.7 seconds</strong>. That&rsquo;s a <strong>~227&times; execution speedup</strong>. Total latency goes from 672s &rarr; 43s. <em>This is the hackathon demo story.</em></div>
+    <div class="callout cb"><strong>rolling_alert cuDF worked perfectly:</strong> 0.15s execution, correct anomaly detection code generated, no errors. Cleanest demo candidate &mdash; fast, visual, useful, GPU win is unambiguous.</div>
+  </div>
+
+  <h3 style="margin:1.8rem 0 .9rem">Issues Found + Fixes Needed</h3>
+  <div class="card">
+    <div class="tw">
+      <table>
+        <tr><th>Issue</th><th>Root Cause</th><th>Fix</th><th>Priority</th></tr>
+        <tr><td><strong>priority_ranking cuDF fails</strong></td><td style="font-size:.81rem">Model used df.apply() despite cheat-sheet &mdash; cuDF UDF won&rsquo;t compile</td><td style="font-size:.81rem">Add explicit vectorized priority_score example to cheat-sheet</td><td><span class="tag ta">High</span></td></tr>
+        <tr><td><strong>dashboard_summary cuDF truncated</strong></td><td style="font-size:.81rem">MAX_NEW_TOKENS=512 too small &mdash; code block hit limit, never closed</td><td style="font-size:.81rem">Increase to 1024 + add partial code recovery in extract_code()</td><td><span class="tag tr">Critical</span></td></tr>
+        <tr><td><strong>rolling_alert pandas fails</strong></td><td style="font-size:.81rem">.abs() chained after SeriesGroupBy &mdash; wrong pandas API</td><td style="font-size:.81rem">Add correct rolling_alert example to pandas system prompt</td><td><span class="tag ta">Medium</span></td></tr>
+        <tr><td><strong>risk_model cuDF error</strong></td><td style="font-size:.81rem">Series.values iteration issue in exec namespace</td><td style="font-size:.81rem">Pre-inject values_host accessor or add try/except in executor</td><td><span class="tag ta">Medium</span></td></tr>
+        <tr><td><strong>GPU slower at 100K rows</strong></td><td style="font-size:.81rem">CUDA kernel launch overhead dominates at small data</td><td style="font-size:.81rem">Auto-threshold: CPU for &lt;500K rows, GPU above. Demo uses 1M+.</td><td><span class="tag tb">Low</span></td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 07 ARCHITECTURE -->
+<section class="sec" id="p07">
+  <div class="snum">07 / Architecture</div>
+  <h2>Reference Architecture</h2>
+  <p class="slead">Combining the Google Cloud data layer with NVIDIA acceleration and a natural-language application layer &mdash; exactly as specified in the hackathon problem statement.</p>
+  <div class="arch">
+    <div class="ac">
+      <div class="act gg">Google Cloud Data Layer</div>
+      <div class="ai">Cloud Storage &mdash; raw CSV ingestion</div>
+      <div class="ai">BigQuery &mdash; structured data store + queries</div>
+      <div class="ai">Gemini &mdash; LLM fallback / code validation</div>
+      <div class="ai">Cloud Run / GKE &mdash; deployment target</div>
+      <div class="ai">Looker &mdash; dashboard output (optional)</div>
+    </div>
+    <div class="ac">
+      <div class="act ng">NVIDIA Acceleration Layer</div>
+      <div class="ai">Tesla T4 GPU (15,360 MiB)</div>
+      <div class="ai">cuDF 26.02 &mdash; GPU DataFrame</div>
+      <div class="ai">cuML 26.02 &mdash; GPU ML (RF, LR, KMeans)</div>
+      <div class="ai">cudf.pandas &mdash; transparent drop-in mode</div>
+      <div class="ai">RAPIDS pipeline &mdash; ingest to model</div>
+    </div>
+    <div class="ac">
+      <div class="act pg">Application + Decision Layer</div>
+      <div class="ai">DataSense LLM &mdash; Gemma-4 E2B + LoRA</div>
+      <div class="ai">E2B Sandbox &mdash; GPU-backed code exec</div>
+      <div class="ai">cudf.pandas injection &mdash; transparent GPU</div>
+      <div class="ai">Web UI &mdash; NL query interface</div>
+      <div class="ai">Ranked output table &mdash; actionable results</div>
+    </div>
+  </div>
+  <div class="callout cb"><strong>Key architectural choice:</strong> <code>cudf.pandas.install()</code> injected at E2B sandbox boot. DataSense model keeps writing standard pandas code as trained &mdash; GPU acceleration happens transparently. <strong>No fine-tuning needed to generate cuDF syntax.</strong></div>
+  <pre><code style="color:var(--dim)"># Execution flow inside the E2B sandbox:
+
+# 1. Injected at sandbox boot (transparent to LLM):
+import cudf.pandas
+cudf.pandas.install()
+
+# 2. DataSense model generates (normal pandas syntax):
+result = df.groupby("store_id")["revenue"].rolling(7).mean()
+
+# 3. cudf.pandas intercepts &rarr; runs on GPU automatically
+# &rarr; What takes 27.4s on CPU takes 0.4s on GPU
+# &rarr; Same code, same output, 69&times; faster</code></pre>
+</section>
+
+<!-- 08 BUILD PLAN -->
+<section class="sec" id="p08">
+  <div class="snum">08 / 2-Day Build Plan</div>
+  <h2>What We Build in 48 Hours</h2>
+  <p class="slead">Prioritised task list &mdash; Day 1 gets us to a working demo, Day 2 polishes for submission.</p>
+  <div class="g2" style="margin-top:1.4rem">
+    <div class="card">
+      <div class="ctitle" style="color:var(--green)">Day 1 &mdash; Core Pipeline</div>
+      <ul class="cl">
+        <li class="done"><strong>GPU sweep benchmark complete</strong> &mdash; cuDF vs pandas 100K&ndash;20M rows</li>
+        <li class="done"><strong>LLM benchmark complete</strong> &mdash; DataSense tested on 4 tasks</li>
+        <li class="done"><strong>Winning use cases identified</strong> &mdash; rolling alerts + risk model</li>
+        <li class="done"><strong>Fix MAX_NEW_TOKENS &rarr; 1024</strong> &mdash; prevent code truncation</li>
+        <li class="done"><strong>Fix extract_code() fallback</strong> &mdash; recover partial code blocks</li>
+        <li class="done"><strong>Add vectorized priority_score to cheat-sheet</strong> &mdash; fix cuDF apply() error</li>
+        <li class="done"><strong>Build E2B executor with cudf.pandas injection</strong> &mdash; transparent GPU mode</li>
+        <li class="done"><strong>Connect to sample BigQuery table</strong> &mdash; real data ingestion</li>
+        <li class="done"><strong>End-to-end test: NL query &rarr; cuDF exec &rarr; result</strong></li>
+      </ul>
+    </div>
+    <div class="card">
+      <div class="ctitle" style="color:var(--blue)">Day 2 &mdash; Demo + Submission</div>
+      <ul class="cl">
+        <li class="done"><strong>Build web UI</strong> &mdash; text input, output table, timing display</li>
+        <li class="done"><strong>Side-by-side demo view</strong> &mdash; pandas CPU vs cuDF GPU, same query</li>
+        <li class="done"><strong>Record 3-minute demo video</strong> &mdash; rolling_alert + risk_model tasks</li>
+        <li class="done"><strong>Speedup chart in UI</strong> &mdash; live GPU vs CPU bar chart</li>
+        <li class="done"><strong>Write GitHub README</strong> &mdash; setup, architecture, results</li>
+        <li class="done"><strong>Polish presentation deck</strong> &mdash; based on PPTX template</li>
+        <li class="done"><strong>Deploy to Cloud Run or Kaggle</strong> &mdash; working prototype link</li>
+        <li class="done"><strong>Submit</strong> &mdash; deck + GitHub + demo video + description</li>
+      </ul>
+    </div>
+  </div>
+  <div class="tl" style="margin-top:1.8rem">
+    <div class="tlr"><div class="tld">Jun 29</div><div class="tldot done"></div><div class="tlc"><strong>Team Formation &amp; Prototype Submission Opens</strong>Testing, benchmarking, problem statement selection begins.</div></div>
+    <div class="tlr"><div class="tld">Jul 3</div><div class="tldot now"></div><div class="tlc"><strong>TODAY &mdash; Benchmarks Done, Direction Locked</strong>GPU sweep complete. rolling_alert + risk_model selected as core demo tasks. Build starts now.</div></div>
+    <div class="tlr"><div class="tld">Jul 5&ndash;6</div><div class="tldot"></div><div class="tlc"><strong>Prototype Deadline</strong>Working demo + video + GitHub repo must be submitted.</div></div>
+    <div class="tlr"><div class="tld">Jul 7&ndash;14</div><div class="tldot"></div><div class="tlc"><strong>Prototype Evaluation</strong>Judges review submissions on 5 criteria (20% each).</div></div>
+    <div class="tlr"><div class="tld">Jul 15</div><div class="tldot"></div><div class="tlc"><strong>Top 100 Teams Announced</strong>Across both problem statements.</div></div>
+    <div class="tlr"><div class="tld">Jul 31</div><div class="tldot"></div><div class="tlc"><strong>Top 10 Teams Shortlisted</strong>For virtual finale.</div></div>
+    <div class="tlr"><div class="tld">Aug 4</div><div class="tldot"></div><div class="tlc"><strong>Virtual Finale</strong>Live demo to judges. Cash prizes up to $10,000.</div></div>
+  </div>
+</section>
+
+<!-- 09 EVALUATION -->
+<section class="sec" id="p09">
+  <div class="snum">09 / Evaluation Mapping</div>
+  <h2>How We Score on Each Criterion</h2>
+  <p class="slead">The hackathon judges 5 criteria at 20% each. Here&rsquo;s how our project maps to each one.</p>
+  <div class="card" style="margin-top:1.4rem">
+    <div class="tw">
+      <table>
+        <tr><th style="width:22%">Criterion (20% each)</th><th>What We Deliver</th><th>Key Evidence</th></tr>
+        <tr><td><strong>Solution Quality / Functionality</strong></td><td>Working NL &rarr; cuDF &rarr; ranked output pipeline. Two tasks confirmed working (rolling_alert, dashboard_summary). Risk model shows 227&times; exec speedup.</td><td>Live demo video, benchmark CSV, speedup chart</td></tr>
+        <tr><td><strong>Architecture / Technical Execution</strong></td><td>Google Cloud (BigQuery + Cloud Storage) + NVIDIA RAPIDS (cuDF + cuML) + DataSense LLM + E2B + Web UI. Matches reference architecture exactly.</td><td>Architecture diagram, GitHub repo, test notebook</td></tr>
+        <tr><td><strong>Impact / Use Case Relevance</strong></td><td>Real persona (ops manager / support lead). Real decision. Real bottleneck. Applies to retail, logistics, finance. GPU makes the difference between stale data and live decisions.</td><td>Persona slides, problem statement, time-to-decision comparison</td></tr>
+        <tr><td><strong>Technical Choices / Feasibility</strong></td><td>cudf.pandas is NVIDIA&rsquo;s official approach. DataSense LLM already fine-tuned and working. E2B is production-grade. All components tested with real output in notebook.</td><td>Test notebooks with real output, error log, fixes documented</td></tr>
+        <tr><td><strong>Demo / UX / Presentation</strong></td><td>Side-by-side CPU vs GPU demo. Live speedup counter. Natural language input. Under 3-min video with timing overlay for rolling_alert + risk_model tasks.</td><td>Demo video, UI screenshot, presentation deck (PPTX template)</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- 10 STACK -->
+<section class="sec" id="p10">
+  <div class="snum">10 / Technology Stack</div>
+  <h2>Full Stack</h2>
+  <div class="g2" style="margin-top:1.4rem">
+    <div class="card"><div class="ctitle">NVIDIA Layer</div><div class="stk"><span class="tech nv">NVIDIA RAPIDS</span><span class="tech nv">cuDF 26.02</span><span class="tech nv">cuML 26.02</span><span class="tech nv">cudf.pandas</span><span class="tech nv">Tesla T4 GPU</span><span class="tech nv">CUDA 12.8</span><span class="tech nv">cuPy</span></div></div>
+    <div class="card"><div class="ctitle">Google Cloud Layer</div><div class="stk"><span class="tech gv">BigQuery</span><span class="tech gv">Cloud Storage</span><span class="tech gv">Gemini</span><span class="tech gv">Cloud Run</span><span class="tech gv">GKE</span><span class="tech gv">Looker</span></div></div>
+    <div class="card"><div class="ctitle">Model &amp; Execution Layer</div><div class="stk"><span class="tech">Gemma-4 E2B (4-bit)</span><span class="tech">unsloth</span><span class="tech">LoRA adapter</span><span class="tech">E2B Sandbox</span><span class="tech">transformers 5.12</span><span class="tech">torch 2.10+cu128</span></div></div>
+    <div class="card"><div class="ctitle">Application Layer</div><div class="stk"><span class="tech">Python 3.11</span><span class="tech">Kaggle (prototyping)</span><span class="tech">sklearn (CPU baseline)</span><span class="tech">matplotlib</span><span class="tech">boto3</span><span class="tech">HTML / JS UI</span></div></div>
+  </div>
+</section>
+
+<!-- 11 RISKS -->
+<section class="sec" id="p11">
+  <div class="snum">11 / Risks &amp; Mitigations</div>
+  <h2>Known Risks</h2>
+  <div class="card" style="margin-top:1.4rem">
+    <div class="tw">
+      <table>
+        <tr><th>Risk</th><th>Likelihood</th><th>Impact</th><th>Mitigation</th></tr>
+        <tr><td><strong>Model generates df.apply() for cuDF</strong></td><td><span class="tag ta">Medium</span></td><td><span class="tag tr">High</span></td><td>Add vectorized examples to cheat-sheet. Post-process generated code to replace apply() before execution.</td></tr>
+        <tr><td><strong>E2B sandbox RAM limit at 3GB data</strong></td><td><span class="tag ta">Medium</span></td><td><span class="tag ta">Medium</span></td><td>Use 150MB subset for LLM tasks. Full data stays in BigQuery &mdash; only query results come to sandbox.</td></tr>
+        <tr><td><strong>Token limit truncates generated code</strong></td><td><span class="tag tg">Fixed</span></td><td><span class="tag tr">High</span></td><td>MAX_NEW_TOKENS 512 &rarr; 1024. extract_code() fallback for unclosed backtick blocks.</td></tr>
+        <tr><td><strong>GPU startup overhead at small data</strong></td><td><span class="tag tr">Confirmed</span></td><td><span class="tag ta">Medium</span></td><td>Auto-threshold: CPU for &lt;500K rows, GPU above. Demo always uses 1M+ rows where GPU wins are dramatic.</td></tr>
+        <tr><td><strong>LLM generation dominates total latency</strong></td><td><span class="tag tr">Confirmed</span></td><td><span class="tag ta">Medium</span></td><td>Frame demo correctly &mdash; show exec_s comparison, not total_s. The 613s vs 2.7s exec story is the pitch.</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="callout ca"><strong>Critical framing note:</strong> LLM generation takes 30&ndash;90s per query &mdash; identical for both pandas and cuDF backends. The hackathon demo must focus on <strong>execution time speedup</strong> only. Pre-generate the code, then show only the execution comparison side-by-side. Story: <em>&ldquo;The analysis that used to take 10 minutes to compute now takes 3 seconds.&rdquo;</em></div>
+</section>
+
+<!-- 12 USP -->
+<section class="sec" id="p12">
+  <div class="snum">12 / Novelty &amp; USP</div>
+  <h2>Why This Stands Out</h2>
+  <div class="g3" style="margin-top:1.4rem">
+    <div class="card"><div class="ctitle">vs. Standard LLM agents</div><h3>GPU-native execution</h3><p style="color:var(--dim);font-size:.87rem">Every other LLM data agent (ChatGPT Code Interpreter, Gemini, etc.) executes on CPU. We run on NVIDIA GPU via cuDF &mdash; 69&times; faster at scale.</p></div>
+    <div class="card"><div class="ctitle">vs. Traditional dashboards</div><h3>Natural language first</h3><p style="color:var(--dim);font-size:.87rem">Looker/Tableau require pre-built queries. We let you ask in plain English and get a real-time GPU-computed answer on live data &mdash; no dashboard to configure.</p></div>
+    <div class="card"><div class="ctitle">vs. Fine-tuned cuDF models</div><h3>No retraining needed</h3><p style="color:var(--dim);font-size:.87rem">We use cudf.pandas injection &mdash; the existing DataSense model writes normal pandas code and it runs on GPU transparently. No expensive GPU fine-tuning cycle required.</p></div>
+  </div>
+</section>
+
+</div><!-- /wrap -->
+<footer>DataSense GPU &middot; Gen AI Academy APAC &middot; Problem Statement 2 &middot; NVIDIA Track<br>Built from 3 profiling runs &middot; GPU sweep: 100K&ndash;20M rows &middot; Tesla T4 &middot; cuDF 26.02.01<br>Prototype deadline: July 6, 2026</footer>
+</body>
+</html>

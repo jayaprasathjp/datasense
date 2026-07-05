@@ -105,6 +105,17 @@ def _extract_code(text: str) -> str:
         code = code[3:]
     if code.endswith("```"):
         code = code[:-3]
+    
+    # LLMs occasionally capitalize cuDF, which breaks the python import (it must be all lowercase 'cudf')
+    code = code.replace("cuDF", "cudf")
+    
+    # Forcefully strip out any dummy dataframe generation so it doesn't overwrite our real `df`
+    import re
+    # Remove multiline data = { ... } blocks
+    code = re.sub(r'data\s*=\s*\{.*?\}', '', code, flags=re.DOTALL)
+    # Remove df = cudf.DataFrame(...) or pd.DataFrame(...)
+    code = re.sub(r'df\s*=\s*(cudf|pd)\.DataFrame\(.*?\)', '', code, flags=re.DOTALL)
+    
     return code.strip()
 
 def synthesize_code(query: str, task_type: str = "data_analysis") -> str:

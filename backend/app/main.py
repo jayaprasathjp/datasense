@@ -5,6 +5,7 @@ import logging
 
 from app.api.routes import router
 from app.data.bigquery import fetch_ecommerce_data
+from app.services.e2b_sandbox import init_sandbox
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,6 +17,8 @@ async def lifespan(app: FastAPI):
     try:
         # Load BigQuery data into global DataFrame and export Parquet
         fetch_ecommerce_data()
+        # Initialize and pre-warm the E2B GPU sandbox
+        init_sandbox()
     except Exception as e:
         logger.error(f"Failed to fetch initial data: {e}")
         # Not stopping the server here to allow debugging

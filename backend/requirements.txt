@@ -8,3 +8,5 @@ google-cloud-bigquery
 pandas
 db-dtypes
 pyarrow
+
+google-cloud-bigquery-storage

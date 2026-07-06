@@ -1,6 +1,7 @@
 import logging
 import httpx
 from app.core.config import settings
+from app.data.bigquery import DATASET_SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -10,7 +11,7 @@ CUDF_CHEATSHEET = """
 # ════════════════════════════════════════════════════════════════
 #
 # The variable `df` is ALREADY a cuDF DataFrame.
-# Do NOT call cudf.DataFrame.from_pandas() or read any file.
+# Do NOT call cudf.from_pandas() or read any file.
 #
 # 1. groupby + agg  (identical syntax to pandas)
 #    out = df.groupby(["store_id", "region"]).agg({"revenue": "sum", "qty": "mean"})
@@ -27,8 +28,14 @@ CUDF_CHEATSHEET = """
 # 5. boolean filter  (identical syntax to pandas)
 #    out = df[df["risk_score"] > 0.5]
 #
-# 6. add a computed column  (identical syntax to pandas)
-#    df["priority_score"] = df["return_flag"] * 0.6 + df["ticket_age_hours"] * 0.4
+# 6. priority score / ranking  (vectorized ONLY — DO NOT use df.apply or lambda row)
+#    df["priority_score"] = (
+#        df["return_flag"] * 0.45
+#        + (df["ticket_age_hours"] / (df["ticket_age_hours"].max() + 1e-9)) * 0.20
+#        + (1.0 - df["sentiment"].clip(-2, 2)/2) * 0.20
+#        + (df["days_since_restock"] / (df["days_since_restock"].max() + 1e-9)) * 0.15
+#    )
+#    result = df.sort_values("priority_score", ascending=False).head(25)
 #
 # 7. cuML classifier  (sklearn-style API — use cuml, NOT sklearn)
 #    import cuml
@@ -37,13 +44,17 @@ CUDF_CHEATSHEET = """
 #    y = df["risk_label"].astype("int32")
 #    clf = cuRFC(n_estimators=50, max_depth=10)
 #    clf.fit(X, y)
-#    proba = clf.predict_proba(X)   # column 1 = positive-class probability
-#    df["pred_risk"] = proba[:, 1]
+#    proba = clf.predict_proba(X)   # returns cuDF DataFrame/Series
+#    # Use .iloc to access the column securely
+#    df["pred_risk"] = proba.iloc[:, 1] if hasattr(proba, "iloc") else proba[:, 1]
 #
 # 8. convert result to pandas at the END only (for display)
 #    result = df.head(20).to_pandas()
 #
 # CRITICAL RULES:
+#   - The module name is `cudf` (all lowercase) — NOT `cuDF` or `CuDF`
+#   - `cudf` is ALREADY imported — do NOT write `import cudf` at the top
+#   - `df` is ALREADY a cuDF DataFrame — do NOT call cudf.from_pandas()
 #   - .astype("float32") for ML feature columns
 #   - .astype("int32")   for integer label columns
 #   - DO NOT use: df.apply(lambda ...), df.iterrows(), df.itertuples()
@@ -58,12 +69,28 @@ SYSTEM_PROMPT_CUDF = (
     + CUDF_CHEATSHEET +
     "\nRESPONSE FORMAT:\n"
     "- Write exactly ONE ```python code block. No explanation outside it.\n"
-    "- You MUST output the result as a valid JSON string using `json.dumps()`.\n"
-    "- Ensure you convert any numpy data types (like np.float64) to native Python types (float, int) before calling json.dumps(), otherwise it will fail to serialize.\n"
-    "- Example: `import json; print(json.dumps({'result': float(final_value)}))`\n"
+    "- Assign the final answer to a variable named `result`.\n"
     "- Follow the cheat-sheet above exactly — no pandas, no sklearn.\n"
     "- NEVER generate comments about dummy data or create a dummy DataFrame. Assume `df` is already in memory."
 )
+
+# ── Pandas system prompt (from notebook Section E SYSTEM_PROMPT_PANDAS) ──────
+SYSTEM_PROMPT_PANDAS = (
+    "You are DataSense, a data-science agent.\n"
+    "You write pandas + sklearn code to answer questions about tabular datasets.\n"
+    "The dataframe `df` is ALREADY a pandas DataFrame — do NOT import or recreate it.\n"
+    "NEVER use pd.read_csv(), pd.read_parquet(), open(), or any file I/O.\n"
+    "ALL data is in the variable `df` — use it directly.\n"
+    "\nCRITICAL RULES:\n"
+    "1. Only use column names listed in the schema below.\n"
+    "2. Write vectorised operations — avoid row-by-row loops.\n"
+    "3. Do NOT call .to_pandas() — `df` is already a pandas DataFrame.\n"
+    "4. Do NOT import cudf or use any cuDF/cuML APIs.\n"
+    "\nRESPONSE FORMAT:\n"
+    "- Write exactly ONE ```python code block. No explanation outside it.\n"
+    "- Assign the final answer to a variable named `result`.\n"
+    "- NEVER generate comments about dummy data or create a dummy DataFrame. Assume `df` is already in memory."
+).strip()
 
 
 def _call_modal(system_prompt: str, user_prompt: str) -> str:
@@ -122,30 +149,61 @@ def synthesize_code(query: str, task_type: str = "data_analysis") -> str:
     """
     Translates a natural language query into cuDF code using the fine-tuned model on Modal.
     """
-    logger.info(f"Synthesizing code for query: {query}")
-    
+    logger.info(f"Synthesizing GPU (cuDF) code for query: {query}")
+
     user_prompt = f"""
 Task Type: {task_type}
 Query: {query}
 
-Assume there is a pre-loaded cuDF DataFrame named `df`.
-The DataFrame has the following columns: id, order_id, user_id, product_id, sale_price, created_at, status.
+Dataset schema:
+{DATASET_SCHEMA}
+
+Assume there is a pre-loaded cuDF DataFrame named `df` with the columns above.
 """
-    
     model_output = _call_modal(SYSTEM_PROMPT_CUDF, user_prompt)
     return _extract_code(model_output)
 
 
-def fix_code(original_code: str, error_message: str) -> str:
+def synthesize_cpu_code(query: str, task_type: str = "data_analysis") -> str:
     """
-    Asks the fine-tuned model to fix the cuDF code based on an execution error.
+    Translates a natural language query into pandas code using the fine-tuned model on Modal.
+    Uses SYSTEM_PROMPT_PANDAS — a separate prompt that explicitly forbids cudf/cuml.
     """
-    logger.info("Sending code to Modal LLM for error fixing...")
-    
+    logger.info(f"Synthesizing CPU (pandas) code for query: {query}")
+
     user_prompt = f"""
-The following cuDF code was executed but resulted in an error. 
-Please fix the code. Assume there is a pre-loaded cuDF DataFrame named `df`.
-Ensure the final output is printed to stdout using `print()` and `json.dumps()`.
+Task Type: {task_type}
+Query: {query}
+
+Dataset schema:
+{DATASET_SCHEMA}
+
+Assume there is a pre-loaded pandas DataFrame named `df` with the columns above.
+"""
+    model_output = _call_modal(SYSTEM_PROMPT_PANDAS, user_prompt)
+    code = _extract_code(model_output)
+    
+    return code
+
+
+def fix_code(original_code: str, error_message: str, mode: str = "gpu") -> str:
+    """
+    Asks the fine-tuned model to fix the code based on an execution error.
+    Uses the correct system prompt depending on whether it's a CPU or GPU task.
+    """
+    logger.info(f"Sending code to Modal LLM for error fixing (mode={mode})...")
+    
+    if mode == "gpu":
+        sys_prompt = SYSTEM_PROMPT_CUDF
+        backend_name = "cuDF"
+    else:
+        sys_prompt = SYSTEM_PROMPT_PANDAS
+        backend_name = "pandas"
+        
+    user_prompt = f"""
+The following {backend_name} code was executed but resulted in an error. 
+Please fix the code. Assume there is a pre-loaded {backend_name} DataFrame named `df`.
+Assign the final output to a variable named `result`.
 
 Original Code:
 {original_code}
@@ -156,5 +214,5 @@ Error Message:
 Output ONLY the corrected valid Python code. No markdown, no explanations.
 """
     
-    model_output = _call_modal(SYSTEM_PROMPT_CUDF, user_prompt)
+    model_output = _call_modal(sys_prompt, user_prompt)
     return _extract_code(model_output)

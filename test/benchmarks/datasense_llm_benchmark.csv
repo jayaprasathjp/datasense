@@ -1,0 +1,9 @@
+task,category,backend,generation_s,exec_s,total_s,n_tokens,exec_ok,error
+priority_ranking,Risk / priority scoring,pandas,34.046920795999995,21.173381575999883,55.22030237199988,191,True,
+priority_ranking,Risk / priority scoring,cudf,31.15298990600013,1.5989224670001931,32.75191237300032,177,False,ValueError: user defined function compilation failed.
+rolling_alert,Time-series alerting,pandas,43.029000905999965,0.3666961959997934,43.39569710199976,245,False,AttributeError: 'SeriesGroupBy' object has no attribute 'abs'
+rolling_alert,Time-series alerting,cudf,38.70460035799988,0.15284432899989042,38.85744468699977,217,True,
+dashboard_summary,Dashboard backend / BI,pandas,33.89531000699981,0.08650500300018393,33.98181500999999,192,True,
+dashboard_summary,Dashboard backend / BI,cudf,89.95846251499961,,89.95846251499961,512,True,
+risk_model,Risk scoring / classification,pandas,59.07245504499997,613.3550951060001,672.4275501510001,338,True,
+risk_model,Risk scoring / classification,cudf,40.3886537049998,2.655074632999913,43.04372833799971,229,False,"TypeError: Series object is not iterable. Consider using `.to_arrow()`, `.to_pandas()` or `.values_host` if you wish to iterate over the values."

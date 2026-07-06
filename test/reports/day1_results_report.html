@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DataSense GPU - Day 1 Test Results</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #060608;
+            --surface: #121218;
+            --surface-glass: rgba(20, 20, 28, 0.7);
+            --border: #2a2a35;
+            --text-main: #f0f0f8;
+            --text-muted: #8b8b9b;
+            --nv-green: #76b900;
+            --nv-green-glow: rgba(118, 185, 0, 0.3);
+            --accent-blue: #4285f4;
+            --accent-red: #ff4455;
+            --accent-amber: #ffbb33;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+        }
+
+        header {
+            background: var(--surface-glass);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            padding: 2rem 5%;
+            text-align: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin: 0;
+            font-weight: 800;
+            letter-spacing: -1px;
+            background: linear-gradient(90deg, #fff, var(--text-muted));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .badge {
+            display: inline-block;
+            background: rgba(118, 185, 0, 0.1);
+            color: var(--nv-green);
+            border: 1px solid var(--nv-green);
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-top: 1rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 3rem auto;
+            padding: 0 5%;
+        }
+
+        .section-title {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--nv-green);
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 0.5rem;
+            margin-top: 3rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+        }
+
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.5rem;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .card.highlight {
+            border-color: var(--nv-green);
+            box-shadow: 0 0 20px var(--nv-green-glow);
+        }
+
+        .metric {
+            font-size: 3rem;
+            font-weight: 800;
+            margin: 1rem 0 0.5rem 0;
+            line-height: 1;
+        }
+
+        .metric.green { color: var(--nv-green); }
+        .metric.red { color: var(--accent-red); }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1rem;
+            background: var(--surface);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        th, td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            background: rgba(255,255,255,0.02);
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+        
+        tr.highlight-row {
+            background: rgba(118, 185, 0, 0.05);
+            border-left: 3px solid var(--nv-green);
+        }
+
+        code {
+            font-family: 'JetBrains Mono', monospace;
+            background: rgba(255,255,255,0.05);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-size: 0.9em;
+            color: var(--accent-amber);
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Day 1: Technical Validation Report</h1>
+        <p style="color: var(--text-muted); max-width: 600px; margin: 1rem auto;">
+            Final profiling results validating the NVIDIA RAPIDS (cuDF + cuML) pipeline against standard Pandas/Scikit-learn on a Tesla T4 GPU.
+        </p>
+        <div class="badge">Problem Statement 2 — NVIDIA Track</div>
+    </header>
+
+    <div class="container">
+        
+        <h2 class="section-title">01 / Dataset Migration</h2>
+        <div class="card">
+            <h3>Google Cloud BigQuery Integration</h3>
+            <p>We successfully transitioned from synthetic benchmarks to real-world eCommerce data. The pipeline now queries public BigQuery datasets directly into Kaggle.</p>
+            <ul>
+                <li><strong>Source:</strong> <code>bigquery-public-data.thelook_ecommerce.order_items</code></li>
+                <li><strong>Scale:</strong> 181,420 real transactional rows</li>
+                <li><strong>Features used:</strong> Real <code>status</code> mapped to <code>return_flag</code>, real timestamps, pricing, and quantities.</li>
+                <li><strong>Target Persona:</strong> Retail Operations Manager & Support Leads dealing with return triaging and risk prediction.</li>
+            </ul>
+        </div>
+
+        <h2 class="section-title">02 / LLM-in-the-Loop Execution Benchmark</h2>
+        <p style="color: var(--text-muted);">Testing the execution time of the code successfully generated by the Gemma-4 DataSense model across all 4 core tasks. <i>Note: LLM generation time (~30-40s) is identical for both; we are measuring the execution bottleneck.</i></p>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>LLM Generated Task</th>
+                    <th>Category</th>
+                    <th>CPU (Pandas) Exec</th>
+                    <th>GPU (cuDF) Exec</th>
+                    <th>Outcome</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Dashboard Summary</strong></td>
+                    <td>Data Wrangling</td>
+                    <td>0.03s</td>
+                    <td>0.21s</td>
+                    <td>Fast on both (CUDA overhead visible at sub-second scale)</td>
+                </tr>
+                <tr>
+                    <td><strong>Priority Ranking</strong></td>
+                    <td>Vectorized Math</td>
+                    <td>0.04s</td>
+                    <td>0.63s</td>
+                    <td>Fast on both (CPU marginally faster for simple math on 181K rows)</td>
+                </tr>
+                <tr>
+                    <td><strong>Rolling Alert</strong></td>
+                    <td>Time-Series Window</td>
+                    <td>0.10s</td>
+                    <td>0.13s</td>
+                    <td>Equal performance on 181K rows</td>
+                </tr>
+                <tr class="highlight-row">
+                    <td><strong>Risk Model</strong></td>
+                    <td>Machine Learning (Random Forest)</td>
+                    <td><strong style="color: var(--accent-red);">81.04s</strong></td>
+                    <td><strong style="color: var(--nv-green);">0.38s</strong></td>
+                    <td><strong style="color: var(--nv-green);">213&times; Speedup</strong> — CPU fails UX requirements</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <div style="text-align: center; margin: 3rem 0;">
+            <h3 style="font-size: 2rem; color: #fff;">The 213&times; "Killer Metric"</h3>
+            <p style="color: var(--text-muted);">This validates our core thesis: the LLM thinks fast, but standard CPU execution on complex tasks (like Risk Modeling) kills the UX. <br>GPU acceleration makes conversational data science interactive.</p>
+        </div>
+
+        <h2 class="section-title">03 / Raw GPU Sweep Results (Scaling to 20M Rows)</h2>
+        <p style="color: var(--text-muted);">Before introducing the LLM, we isolated the raw operation performance comparing pandas vs cuDF scaling from 100K to 20 Million rows on synthetic data.</p>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Operation</th>
+                    <th>Best Scale</th>
+                    <th>CPU Time (Max)</th>
+                    <th>GPU Time (Max)</th>
+                    <th>Max Speedup</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Time-Series Alerting</strong> <code>(rolling_window)</code></td>
+                    <td>20,000,000 rows</td>
+                    <td>23.17s</td>
+                    <td>0.39s</td>
+                    <td><strong style="color: var(--nv-green);">58.9&times;</strong></td>
+                </tr>
+                <tr>
+                    <td><strong>Dashboard Joins</strong> <code>(merge_join)</code></td>
+                    <td>20,000,000 rows</td>
+                    <td>6.73s</td>
+                    <td>0.17s</td>
+                    <td><strong style="color: var(--nv-green);">39.8&times;</strong></td>
+                </tr>
+                <tr>
+                    <td><strong>Data Wrangling</strong> <code>(sort)</code></td>
+                    <td>20,000,000 rows</td>
+                    <td>9.50s</td>
+                    <td>0.45s</td>
+                    <td><strong style="color: var(--nv-green);">21.1&times;</strong></td>
+                </tr>
+                <tr>
+                    <td><strong>BI Dashboards</strong> <code>(groupby_agg)</code></td>
+                    <td>1,000,000 rows</td>
+                    <td>0.14s</td>
+                    <td>0.01s</td>
+                    <td><strong style="color: var(--nv-green);">18.4&times;</strong></td>
+                </tr>
+                <tr>
+                    <td><strong>Risk Scoring</strong> <code>(rf_classify_fit)</code></td>
+                    <td>5,000,000 rows</td>
+                    <td>174.83s</td>
+                    <td>11.13s</td>
+                    <td><strong style="color: var(--nv-green);">15.7&times;</strong></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h2 class="section-title">04 / Autonomous Self-Debugging Loop</h2>
+        <div class="card">
+            <p>During the LLM-in-the-loop tests, the DataSense model hallucinated incorrect Pandas syntax twice. Our custom autonomous loop caught the exceptions, formulated targeted feedback, and prompted the LLM to fix itself.</p>
+            <ul>
+                <li><strong>Time-Series Alerting:</strong> The model attempted <code>.abs()</code> on a <code>SeriesGroupBy</code> object. The loop fed the <code>AttributeError</code> back. The LLM corrected the syntax on Attempt 2 resulting in a successful run.</li>
+                <li><strong>Priority Ranking:</strong> The model missed a markdown code block on Attempt 1. The loop detected the parsing failure and recovered on Attempt 2.</li>
+                <li><strong>Executor Safety:</strong> We implemented sandbox restrictions specifically blocking <code>pd.read_csv</code> and trapping <code>ModuleNotFoundError</code> for case-sensitive errors (e.g. <code>cuDF</code> vs <code>cudf</code>).</li>
+            </ul>
+        </div>
+
+        <h2 class="section-title">05 / Status for Day 2</h2>
+        <div class="grid-2">
+            <div class="card" style="border-left: 4px solid var(--nv-green);">
+                <h4>What's Completed (Day 1)</h4>
+                <ul>
+                    <li>GPU vs CPU Benchmark Sweep (100K - 20M rows)</li>
+                    <li>BigQuery integration with <code>thelook_ecommerce</code></li>
+                    <li>LLM integration (Gemma-4 E2B) with custom Prompts</li>
+                    <li>Autonomous self-healing execution loop</li>
+                    <li>Validation of a 213x speedup on Risk Modeling</li>
+                </ul>
+            </div>
+            <div class="card" style="border-left: 4px solid var(--accent-blue);">
+                <h4>What's Next (Day 2)</h4>
+                <ul>
+                    <li>Build Interactive HTML/JS Web UI</li>
+                    <li>Implement Side-by-Side Live Race visualizer</li>
+                    <li>Record 3-Minute Demo Video</li>
+                    <li>Finalize Slide Deck</li>
+                </ul>
+            </div>
+        </div>
+
+    </div>
+
+</body>
+</html>

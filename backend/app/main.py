@@ -15,6 +15,7 @@ async def lifespan(app: FastAPI):
     logger.info("Starting up FastAPI server...")
     try:
         # Load BigQuery data into global DataFrame and export Parquet
+        # The parquet file will be uploaded into Modal Sandboxes on each execution request
         fetch_ecommerce_data()
     except Exception as e:
         logger.error(f"Failed to fetch initial data: {e}")

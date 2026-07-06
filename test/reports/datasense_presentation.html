@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DataSense GPU - Submission Deck</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #f4f4f9;
+            --surface: #ffffff;
+            --border: #e0e0e0;
+            --text-main: #111111;
+            --text-muted: #555555;
+            --nv-green: #76b900;
+            --accent-red: #d32f2f;
+            --accent-blue: #1976d2;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            font-family: "Times New Roman", Times, serif;
+            font-size: 14pt;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            overflow-x: hidden;
+            scroll-snap-type: y mandatory;
+        }
+
+        /* Fixed Width/Height Slide Container */
+        .slide-container {
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            scroll-snap-align: start;
+            position: relative;
+        }
+
+        .slide {
+            /* Fixed exact dimensions for all slides (16:9 ratio) */
+            width: 1280px;
+            height: 720px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            padding: 50px;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Decorative Elements */
+        .slide::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--nv-green), var(--accent-blue));
+        }
+
+        .slide-number {
+            position: absolute;
+            bottom: 30px;
+            right: 40px;
+            color: var(--text-muted);
+            font-size: 14pt;
+            font-weight: bold;
+            opacity: 0.5;
+        }
+
+        /* Typography */
+        h1, h2, h3 {
+            font-weight: bold;
+            margin-top: 0;
+        }
+
+        h1 {
+            font-size: 3em;
+            color: var(--text-main);
+            margin-bottom: 20px;
+        }
+
+        h2 {
+            font-size: 2em;
+            color: var(--nv-green);
+            margin-bottom: 30px;
+            border-bottom: 2px solid var(--border);
+            padding-bottom: 10px;
+        }
+
+        p, li {
+            font-size: 14pt;
+            line-height: 1.6;
+            color: var(--text-main);
+        }
+
+        /* Layouts */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 40px;
+            height: 100%;
+            align-items: center;
+        }
+
+        .chart-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+            min-height: 350px;
+        }
+
+        /* Highlight Boxes */
+        .box {
+            background: #fdfdfd;
+            border-left: 4px solid var(--nv-green);
+            padding: 20px;
+            border-radius: 0 4px 4px 0;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            font-size: 14pt;
+            background: var(--surface);
+        }
+        th {
+            background: #f5faed;
+            color: var(--nv-green);
+            text-align: left;
+            padding: 15px;
+            border-bottom: 2px solid var(--nv-green);
+        }
+        td {
+            padding: 15px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* Architecture Flow */
+        .flow {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 50px;
+        }
+        .flow-node {
+            background: #ffffff;
+            border: 1px solid var(--border);
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            width: 20%;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        .flow-node strong {
+            color: var(--nv-green);
+            display: block;
+            margin-bottom: 10px;
+            font-size: 16pt;
+        }
+        .flow-arrow {
+            color: var(--text-muted);
+            font-size: 24pt;
+        }
+
+        .placeholder {
+            border: 2px dashed var(--border);
+            height: 60%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            border-radius: 8px;
+            margin-top: 30px;
+            font-size: 14pt;
+            background: #fafafa;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- SLIDE 1: Title -->
+    <div class="slide-container">
+        <div class="slide" style="justify-content: center; text-align: center;">
+            <div style="font-size: 14pt; color: var(--nv-green); font-weight: bold; letter-spacing: 1px; margin-bottom: 20px;">GEN AI ACADEMY APAC</div>
+            <h1>DataSense GPU</h1>
+            <p style="color: var(--text-muted);">Participant Name: Sanjay Malladi</p>
+            <p style="color: var(--text-muted);">Problem Statement 2 (NVIDIA Track) - Data Intelligence Tool</p>
+            <div class="slide-number">01</div>
+        </div>
+    </div>
+
+    <!-- SLIDE 2: Brief -->
+    <div class="slide-container">
+        <div class="slide">
+            <h2>Brief about the idea</h2>
+            <div class="box" style="margin-top: 20px;">
+                <strong>DataSense GPU</strong> is a natural-language data analytics agent that uses NVIDIA RAPIDS (cuDF + cuML) to deliver anomaly alerts and risk scoring up to <strong>213x faster</strong> than traditional CPUs.<br><br>
+                It solves the critical execution bottleneck for Retail Operations Managers and Support Leads handling massive datasets, turning minutes of wait time into sub-second instantaneous decisions.
+            </div>
+            
+            <div class="grid-2" style="grid-template-columns: 1fr 1fr 1fr 1fr; text-align: center; margin-top: 40px; gap: 20px;">
+                <div style="padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: #fdfdfd;">
+                    <h3 style="color: var(--nv-green); font-size: 2em; margin-bottom: 10px;">213x</h3>
+                    <p>Speedup on Random Forest</p>
+                </div>
+                <div style="padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: #fdfdfd;">
+                    <h3 style="color: var(--accent-blue); font-size: 2em; margin-bottom: 10px;">20M</h3>
+                    <p>Rows Processed Seamlessly</p>
+                </div>
+                <div style="padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: #fdfdfd;">
+                    <h3 style="color: var(--accent-red); font-size: 2em; margin-bottom: 10px;">0.38s</h3>
+                    <p>cuDF GPU Execution Time</p>
+                </div>
+                <div style="padding: 20px; border: 1px solid var(--border); border-radius: 8px; background: #fdfdfd;">
+                    <h3 style="color: #76b900; font-size: 2em; margin-bottom: 10px;">69x</h3>
+                    <p>Rolling Window Speedup</p>
+                </div>
+            </div>
+
+            <div class="slide-number">02</div>
+        </div>
+    </div>
+
+    <!-- SLIDE 3: Approach -->
+    <div class="slide-container">
+        <div class="slide">
+            <h2>How did you approach the problem?</h2>
+            <div class="grid-2">
+                <div>
+                    <ul style="display: flex; flex-direction: column; gap: 20px; padding-left: 20px;">
+                        <li><strong>1. Isolated the Bottleneck:</strong> Benchmarked pure CPU (pandas/sklearn) vs GPU (cuDF/cuML) on up to 20M rows.</li>
+                        <li><strong>2. AI Integration:</strong> Built a Gemma-4 E2B LLM pipeline with an autonomous self-healing execution loop.</li>
+                        <li><strong>3. Real-World Data:</strong> Integrated actual eCommerce transactional data via Google BigQuery.</li>
+                        <li><strong>4. The Result:</strong> Measured a massive 213x execution speedup on our core Risk Modeling task.</li>
+                    </ul>
+                </div>
+                <div class="chart-container">
+                    <canvas id="chartSlide3"></canvas>
+                </div>
+            </div>
+            <div class="slide-number">03</div>
+        </div>
+    </div>
+
+    <!-- SLIDE 4: Opportunities -->
+    <div class="slide-container">
+        <div class="slide">
+            <h2>Opportunities & USP</h2>
+            <div class="grid-2">
+                <div class="chart-container">
+                    <canvas id="chartSlide4"></canvas>
+                </div>
+                <div>
+                    <div class="box" style="border-left-color: var(--accent-blue);">
+                        <strong style="color: var(--accent-blue);">The Problem:</strong><br>
+                        Traditional LLM data agents run their generated Python code on standard CPUs. On datasets larger than 1 Million rows, this causes minutes-long delays, destroying the conversational UX.
+                    </div>
+                    <div class="box" style="border-left-color: var(--nv-green);">
+                        <strong style="color: var(--nv-green);">Our USP:</strong><br>
+                        DataSense combines the LLM's intelligent generation with instantaneous GPU execution (&lt; 1s). The LLM thinks fast, and the GPU executes instantly, regardless of data scale.
+                    </div>
+                </div>
+            </div>
+            <div class="slide-number">04</div>
+        </div>
+    </div>
+
+    <!-- SLIDE 5: Features -->
+    <div class="slide-container">
+        <div class="slide">
+            <h2>List of features offered by the solution</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Core Feature</th>
+                        <th>Technology Stack</th>
+                        <th>Performance Impact / Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Time-Series Alerting</strong></td>
+                        <td>cuDF Rolling Windows</td>
+                        <td style="color: var(--nv-green); font-weight: bold;">59x Faster (vs Pandas)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Risk Classification</strong></td>
+                        <td>cuML Random Forest</td>
+                        <td style="color: var(--nv-green); font-weight: bold;">213x Faster (vs Scikit-Learn)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Autonomous Execution</strong></td>
+                        <td>E2B Sandbox + LLM Feedback Loop</td>
+                        <td>Self-heals syntax errors instantly</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Data Ingestion</strong></td>
+                        <td>Google BigQuery + cudf.pandas</td>
+                        <td>Transparent scale to millions of rows</td>
+                    </tr>
+                </tbody>
+            </table>
+            <div class="slide-number">05</div>
+        </div>
+    </div>
+
+    <!-- SLIDE 6: Process Flow -->
+    <div class="slide-container">
+        <div class="slide">
+            <h2>Process Flow / Pipeline</h2>
+            <p>Our 4-stage pipeline automates data intelligence from raw storage to actionable insights.</p>
+            <div class="flow">
+                <div class="flow-node">
+                    <strong>1. Ingest</strong>
+                    Google BigQuery<br><span style="font-size:12pt; color:var(--text-muted)">Load real-world Data</span>
+                </div>
+                <div class="flow-arrow">➔</div>
+                <div class="flow-node">
+                    <strong>2. Analyze</strong>
+                    Gemma-4 LLM<br><span style="font-size:12pt; color:var(--text-muted)">Generate cuDF/cuML code</span>
+                </div>
+                <div class="flow-arrow">➔</div>
+                <div class="flow-node" style="border-color: var(--nv-green); background: #f5faed;">
+                    <strong>3. Model (GPU)</strong>
+                    NVIDIA Tesla T4<br><span style="font-size:12pt; color:var(--nv-green)">Execute in < 1 second</span>
+                </div>
+                <div class="flow-arrow">➔</div>
+                <div class="flow-node">
+                    <strong>4. Act</strong>
+                    Web UI / Dashboard<br><span style="font-size:12pt; color:var(--text-muted)">Ranked Risk Scores & Alerts</span>
+                </div>
+            </div>
+            <div class="slide-number">06</div>
+        </div>
+    </div>
+
+    <!-- SLIDE 7: Wireframes -->
+    <div class="slide-container">
+        <div class="slide">
+            <h2>Wireframes & Mockups</h2>
+            <div class="placeholder">
+                [ Day 2 Interactive Web UI Mockups will be inserted here ]
+            </div>
+            <div class="slide-number">07</div>
+        </div>
+    </div>
+
+    <!-- SLIDE 8: Architecture -->
+    <div class="slide-container">
+        <div class="slide">
+            <h2>Architecture Diagram</h2>
+            <div class="grid-2" style="grid-template-columns: 1fr 1fr 1fr; text-align: center; gap: 30px;">
+                <div class="box" style="border-left: none; border-top: 4px solid var(--accent-blue); padding: 40px 20px;">
+                    <h3>Data Layer</h3>
+                    <p>Google Cloud BigQuery<br>Cloud Storage</p>
+                </div>
+                <div class="box" style="border-left: none; border-top: 4px solid var(--nv-green); padding: 40px 20px; background: #f5faed;">
+                    <h3 style="color: var(--nv-green)">Acceleration Layer</h3>
+                    <p>NVIDIA Tesla T4 GPU<br>cuDF 26.02 & cuML<br>cudf.pandas</p>
+                </div>
+                <div class="box" style="border-left: none; border-top: 4px solid #999; padding: 40px 20px;">
+                    <h3>Application Layer</h3>
+                    <p>Gemma-4 E2B<br>E2B Sandbox<br>Web UI</p>
+                </div>
+            </div>
+            <div class="slide-number">08</div>
+        </div>
+    </div>
+
+    <!-- SLIDE 9: Technologies -->
+    <div class="slide-container">
+        <div class="slide">
+            <h2>Technologies Used</h2>
+            <div class="grid-2">
+                <div class="box">
+                    <strong style="color: var(--nv-green);">NVIDIA Ecosystem</strong>
+                    <ul style="padding-left: 20px;">
+                        <li>RAPIDS (cuDF & cuML 26.02)</li>
+                        <li>cudf.pandas zero-code injection</li>
+                        <li>Tesla T4 GPU (Kaggle / GCP)</li>
+                    </ul>
+                </div>
+                <div class="box" style="border-left-color: var(--accent-blue);">
+                    <strong style="color: var(--accent-blue);">Google Cloud & Models</strong>
+                    <ul style="padding-left: 20px;">
+                        <li>BigQuery (Public eCommerce Data)</li>
+                        <li>Gemma-4 (4-bit quantized via unsloth)</li>
+                        <li>LoRA Adapters for SFT</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="slide-number">09</div>
+        </div>
+    </div>
+
+    <!-- SLIDE 10: Snapshots -->
+    <div class="slide-container">
+        <div class="slide">
+            <h2>Prototype Snapshots</h2>
+            <div class="placeholder">
+                [ Screenshots of the HTML Report and Final UI will be inserted here ]
+            </div>
+            <div class="slide-number">10</div>
+        </div>
+    </div>
+
+    <!-- Chart.js Initialization -->
+    <script>
+        Chart.defaults.color = '#555555';
+        Chart.defaults.font.family = '"Times New Roman", Times, serif';
+        Chart.defaults.font.size = 14;
+
+        // Slide 3 Chart
+        const ctx3 = document.getElementById('chartSlide3').getContext('2d');
+        new Chart(ctx3, {
+            type: 'bar',
+            data: {
+                labels: ['Risk Model Execution (181K Rows)'],
+                datasets: [
+                    {
+                        label: 'CPU (Pandas/Sklearn)',
+                        data: [81.04],
+                        backgroundColor: '#d32f2f',
+                        borderRadius: 4
+                    },
+                    {
+                        label: 'GPU (NVIDIA cuDF/cuML)',
+                        data: [0.38],
+                        backgroundColor: '#76b900',
+                        borderRadius: 4
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom', labels: { color: '#111111', font: {size: 14} } }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Execution Time in Seconds (Lower is Better)', color: '#111111' }
+                    }
+                }
+            }
+        });
+
+        // Slide 4 Chart
+        const ctx4 = document.getElementById('chartSlide4').getContext('2d');
+        new Chart(ctx4, {
+            type: 'bar',
+            data: {
+                labels: ['Time-Series Alerting', 'Dashboard Joins', 'Data Wrangling', 'BI Dashboards', 'Risk Scoring'],
+                datasets: [{
+                    label: 'GPU Speedup Multiplier (vs CPU)',
+                    data: [58.9, 39.8, 21.1, 18.4, 15.7],
+                    backgroundColor: '#76b900',
+                    borderRadius: 4
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'bottom', labels: { color: '#111111', font: {size: 14} } }
+                },
+                scales: {
+                    x: {
+                        beginAtZero: true,
+                        title: { display: true, text: 'Speedup Multiplier (Higher is Better)', color: '#111111' }
+                    },
+                    y: {
+                        ticks: { font: { size: 14 } }
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>

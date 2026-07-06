@@ -11,121 +11,180 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 3
 
-def execute_on_gpu(user_code: str) -> dict:
-    """
-    Executes the given pandas code securely on an E2B Sandbox with cuDF.
-    """
-    logs = []
-    
-    start_time = time.perf_counter()
-    
-    # Initialize the Sandbox
-    logger.info("Initializing E2B Sandbox...")
-    logs.append("Initializing E2B Sandbox...")
-    try:
-        sandbox = Sandbox.create(api_key=settings.e2b_api_key)
-    except Exception as e:
-        logger.error(f"Failed to initialize sandbox: {e}")
-        return {"execution_time_sec": 0, "results": [], "logs": logs + [f"Failed to initialize sandbox: {e}"]}
-    
-    try:
-        # Check if the parquet file exists locally to upload
-        if os.path.exists(PARQUET_FILE_PATH):
-            logger.info("Uploading parquet data to Sandbox...")
-            logs.append("Uploading parquet data to Sandbox...")
-            with open(PARQUET_FILE_PATH, "rb") as f:
-                sandbox.files.write("/home/user/data.parquet", f)
-        else:
-            logger.warning("Local parquet file not found. Sandbox will not have data.")
-            logs.append("Warning: Local parquet file not found.")
+global_sandbox: Sandbox | None = None
 
-        # Prepare the injection payload
-        setup_code = """
+def init_sandbox() -> None:
+    """
+    Initializes a persistent E2B Sandbox, uploads the parquet file ONCE,
+    and pre-loads the data into BOTH cuDF (GPU) and pandas (CPU) DataFrames
+    so both backends are instantly ready for fair benchmarking.
+    """
+    global global_sandbox
+    if global_sandbox is not None:
+        return
+        
+    logger.info("Initializing persistent E2B Sandbox...")
+    global_sandbox = Sandbox.create(api_key=settings.e2b_api_key)
+    
+    if os.path.exists(PARQUET_FILE_PATH):
+        logger.info("Uploading parquet data to Sandbox ONCE...")
+        with open(PARQUET_FILE_PATH, "rb") as f:
+            global_sandbox.files.write("/home/user/data.parquet", f)
+    else:
+        logger.warning("Local parquet file not found. Sandbox will not have data.")
+        
+    logger.info("Pre-warming: loading data into BOTH cuDF (GPU) and pandas (CPU)...")
+    setup_code = """
 import sys
 import subprocess
 
-# Ensure pyarrow is installed to read parquet
 try:
     import pyarrow
 except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "pyarrow"], stdout=subprocess.DEVNULL)
 
-# Try to use cuDF (GPU accelerated pandas) if available
-try:
-    import cudf.pandas
-    cudf.pandas.install()
-    print("cuDF enabled for GPU acceleration.", file=sys.stderr)
-except Exception as e:
-    print(f"cuDF not available, falling back to standard CPU pandas. (Reason: {e})", file=sys.stderr)
-
 import pandas as pd
 import json
+import numpy as np
 
-# Load the dataset
+# Load into pandas (CPU) — stored as `pdf`
+print("Loading data into pandas (CPU)...", file=sys.stderr)
+pdf = pd.read_parquet('/home/user/data.parquet')
+print(f"Loaded {len(pdf)} rows into pandas.", file=sys.stderr)
+
+# Load into cuDF (GPU) — stored as `gdf`
 try:
-    df = pd.read_parquet('/home/user/data.parquet')
+    import cudf
+    print("Loading data into cuDF (GPU)...", file=sys.stderr)
+    gdf = cudf.read_parquet('/home/user/data.parquet')
+    print(f"Loaded {len(gdf)} rows into cuDF.", file=sys.stderr)
 except Exception as e:
-    print(f"Error loading data: {e}", file=sys.stderr)
+    print(f"cuDF not available: {e}", file=sys.stderr)
+    gdf = None
+"""
+    execution = global_sandbox.run_code(setup_code)
+    if execution.error:
+        logger.error(f"Failed to pre-warm sandbox: {execution.error}")
+    else:
+        logger.info("Sandbox pre-warmed and ready (both CPU and GPU data loaded).")
+
+
+def execute_in_sandbox(user_code: str, mode: str = "gpu") -> dict:
+    """
+    Executes code inside the persistent E2B Sandbox.
+    
+    mode="gpu" → sets df = gdf (cuDF DataFrame) before running user code
+    mode="cpu" → sets df = pdf (pandas DataFrame) before running user code
+    
+    This ensures a fair apples-to-apples comparison where the ONLY difference
+    is the DataFrame engine, not network overhead.
+    """
+    global global_sandbox
+    logs = []
+    
+    if global_sandbox is None:
+        logs.append("Sandbox was not initialized. Initializing now...")
+        init_sandbox()
+    
+    # Pick the right DataFrame based on mode
+    if mode == "gpu":
+        df_assign = "df = gdf"
+        logs.append("Mode: GPU (cuDF)")
+    else:
+        df_assign = "df = pdf"
+        logs.append("Mode: CPU (pandas)")
+
+    current_code = user_code
+    retry_count = 0
+    final_results = None
+    pure_exec_time = None
+    
+    while retry_count < MAX_RETRIES:
+        logger.info(f"Executing {mode.upper()} code on Sandbox (Attempt {retry_count + 1})...")
+        logs.append(f"Executing attempt {retry_count + 1}...")
+        
+        # Wrap user code with:
+        # 1. df assignment (pandas or cuDF)
+        # 2. Internal timer that measures PURE execution time
+        wrapper_code = f"""
+import time
+import sys
+{df_assign}
+__e2b_start = time.perf_counter()
+try:
+    exec({repr(current_code)})
+finally:
+    __e2b_end = time.perf_counter()
+    print(f"__E2B_EXEC_TIME_SEC__:{{__e2b_end - __e2b_start}}", file=sys.stderr)
 """
         
-        current_code = user_code
-        retry_count = 0
-        final_results = None
-        
-        while retry_count < MAX_RETRIES:
-            full_code = setup_code + "\n\n" + current_code
-            logger.info(f"Executing code on Sandbox (Attempt {retry_count + 1})...")
-            logs.append(f"Executing attempt {retry_count + 1}...")
-            
-            execution = sandbox.run_code(full_code)
-            
-            if execution.error:
-                error_msg = f"{execution.error.name}: {execution.error.value}\n{execution.error.traceback}"
-                logger.warning(f"Execution Error: {error_msg}")
-                logs.append(f"Execution Error: {error_msg}")
-                
-                # Fallback logic to fix the code
-                if retry_count < MAX_RETRIES - 1:
-                    logger.info("Falling back to Gemini to fix code...")
-                    logs.append("Falling back to Gemini to fix code...")
-                    current_code = fix_code(current_code, error_msg)
-                retry_count += 1
+        try:
+            execution = global_sandbox.run_code(wrapper_code)
+        except Exception as e:
+            error_str = str(e).lower()
+            if "not found" in error_str or "timeout" in error_str:
+                logger.warning("E2B Sandbox timed out or was not found. Re-initializing...")
+                logs.append("Sandbox timed out. Re-initializing...")
+                global_sandbox = None
+                init_sandbox()
+                continue  # Retry with the new sandbox
             else:
-                # Execution successful
-                # Try to parse the printed output as JSON
-                logger.info("Execution successful.")
-                logs.append("Execution successful.")
-                
-                if execution.logs.stdout:
-                    # Collect all stdout lines
-                    output_str = "\n".join(execution.logs.stdout).strip()
-                    logs.append(f"Stdout:\n{output_str}")
-                    try:
-                        # Find the first valid JSON block if there are multiple prints
-                        # For simplicity, let's assume the whole output is the JSON
-                        final_results = json.loads(output_str)
-                    except json.JSONDecodeError:
-                        logs.append("Could not parse output as JSON. Storing raw string.")
-                        final_results = [{"raw_output": output_str}]
-                else:
-                    logs.append("No stdout generated.")
-                    final_results = []
-                
+                # If it's a different exception from E2B SDK, we should still fail or handle it
+                logger.error(f"E2B SDK Error: {e}")
+                logs.append(f"E2B SDK Error: {e}")
                 break
-                
-        if retry_count == MAX_RETRIES and final_results is None:
-            logs.append("Max retries reached. Failed to execute code successfully.")
-            final_results = []
+        
+        if execution.error:
+            error_msg = f"{execution.error.name}: {execution.error.value}\n{execution.error.traceback}"
+            logger.warning(f"Execution Error: {error_msg}")
+            logs.append(f"Execution Error: {error_msg}")
+            
+            if retry_count < MAX_RETRIES - 1:
+                logger.info("Falling back to LLM to fix code...")
+                logs.append("Falling back to LLM to fix code...")
+                current_code = fix_code(current_code, error_msg)
+            retry_count += 1
+        else:
+            logger.info("Execution successful.")
+            logs.append("Execution successful.")
+            
+            # Extract the pure execution time from stderr
+            if execution.logs.stderr:
+                for line in execution.logs.stderr:
+                    if "__E2B_EXEC_TIME_SEC__:" in line:
+                        try:
+                            pure_exec_time = float(line.split("__E2B_EXEC_TIME_SEC__:")[1].strip())
+                        except Exception:
+                            pass
 
-    finally:
-        logger.info("Killing E2B Sandbox...")
-        sandbox.kill()
+            if execution.logs.stdout:
+                output_str = "\n".join(execution.logs.stdout).strip()
+                logs.append(f"Stdout:\n{output_str}")
+                try:
+                    final_results = json.loads(output_str)
+                except json.JSONDecodeError:
+                    logs.append("Could not parse output as JSON. Storing raw string.")
+                    final_results = [{"raw_output": output_str}]
+            else:
+                logs.append("No stdout generated.")
+                final_results = []
+            
+            break
+            
+    if retry_count == MAX_RETRIES and final_results is None:
+        logs.append("Max retries reached. Failed to execute code successfully.")
+        final_results = []
 
-    end_time = time.perf_counter()
-    execution_time = end_time - start_time
-    
     return {
-        "execution_time_sec": execution_time,
+        "execution_time_sec": pure_exec_time if pure_exec_time is not None else 0.0,
         "results": final_results if isinstance(final_results, list) else [final_results],
         "logs": logs
     }
+
+
+# Convenience wrappers
+def execute_on_gpu(user_code: str) -> dict:
+    return execute_in_sandbox(user_code, mode="gpu")
+
+def execute_on_cpu(user_code: str) -> dict:
+    return execute_in_sandbox(user_code, mode="cpu")

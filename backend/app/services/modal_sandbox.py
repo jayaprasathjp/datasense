@@ -13,6 +13,16 @@ from app.services.llm_engine import fix_code
 
 logger = logging.getLogger(__name__)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Force the Modal SDK to use the credentials from .env / Cloud Run env vars
+# instead of falling back to the local ~/.modal.toml file.
+# This ensures sandboxes are created on the teammate's workspace.
+# ─────────────────────────────────────────────────────────────────────────────
+if settings.modal_token_id:
+    os.environ["MODAL_TOKEN_ID"] = settings.modal_token_id
+if settings.modal_token_secret:
+    os.environ["MODAL_TOKEN_SECRET"] = settings.modal_token_secret
+
 MAX_RETRIES = 3
 
 # ─────────────────────────────────────────────────────────────────────────────

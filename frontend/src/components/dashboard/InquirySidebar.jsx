@@ -16,7 +16,7 @@ function InquirySidebar({ heading = 'Inquiries', items = [], activeIndex = 0, on
                   onClick={() => onSelect?.(index)}
                   className={`w-full rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
                     isActive
-                      ? 'bg-indigo-50 text-indigo-700'
+                      ? 'bg-[#e8edf2] text-[#1e3a5f]'
                       : 'text-zinc-600 hover:bg-zinc-50 hover:text-zinc-900'
                   }`}
                 >

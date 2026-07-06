@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
 class Settings(BaseSettings):
-    gemini_api_key: str
+    gemini_api_key: Optional[str] = None
     # --- Modal LLM inference endpoint (custom HTTP endpoint from modal_app.py) ---
     modal_url: str = ""
     modal_api_key: str = ""  # Bearer token for the custom Modal LLM HTTP endpoint

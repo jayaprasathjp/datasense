@@ -5,34 +5,34 @@ import BriefPanel from './BriefPanel'
 import ProcessStepper from './ProcessStepper'
 import SynthesizedLogic from './SynthesizedLogic'
 import InquiryResults from './inquiries/InquiryResults'
+import BenchmarkStrip from './BenchmarkStrip'
 import Card from '../ui/Card'
 import SectionLabel from '../ui/SectionLabel'
-import { CODE_SNIPPETS } from '../../data/mockData'
 
 const INQUIRIES = [
   {
     label: 'Risk Classification (RF)',
     query:
-      'Train a classifier to predict delay_risk_label from numeric features and return the top 20 highest-risk shipments with pred_risk probability.',
-    codeKey: 'riskClassification',
+      'Train a classifier to predict risk_label from numeric columns (feat_1 to feat_4, price, qty, discount_pct, ticket_age_hours, sentiment, days_since_restock). Return the top 20 highest-risk rows with predicted probability as a new column called pred_risk.',
+    task_type: 'Risk scoring / classification',
   },
   {
     label: 'Time-Series Alerting',
     query:
-      "Compute a 7-day rolling average parcel volume per distribution hub. Flag the top 10 hubs where today's volume is more than 30% above the rolling average.",
-    codeKey: 'timeSeriesAlerting',
+      "Compute a 7-day rolling average revenue per store. Flag the top 10 stores where today's revenue is more than 20% below the rolling average. Return a dataframe of those anomalies.",
+    task_type: 'Time-series alerting',
   },
   {
     label: 'Operational Triage',
     query:
-      'Rank the top 25 shipments by operational priority using vehicle_breakdown_flag, ticket_age_hours, weather_severity, sentiment, and delay_cost.',
-    codeKey: 'operationalTriage',
+      'Rank the top 25 rows by operational priority using return_flag, ticket_age_hours, days_since_restock, sentiment, and margin. Add a priority_score column and return the ranked dataframe.',
+    task_type: 'data_analysis',
   },
   {
     label: 'Executive Summary',
     query:
-      'Create a dashboard summary grouped by region and hub_tier showing total shipments, on-time rate, avg delay, vehicle breakdown rate, and avg sentiment.',
-    codeKey: 'executiveSummary',
+      'Create an aggregated dashboard summary grouped by region and support_tier. Show total revenue, average margin, return rate, average ticket_age_hours, and average sentiment.',
+    task_type: 'data_analysis',
   },
 ]
 
@@ -47,36 +47,78 @@ function CodeBlock({ code }) {
 }
 
 function Dashboard({
-  title = 'FleetPulse / GPU',
-  dataset = 'global_logistics_network (181K shipments)',
-  model = 'Gemma-4-E2B (LoRA)',
+  title = 'DataSense / GPU',
+  dataset = 'Synthetic transactions (1M rows)',
+  model = 'Gemma-4-E2B (LoRA) via Modal',
 }) {
   const [activeInquiry, setActiveInquiry] = useState(0)
   const [stepIndex, setStepIndex] = useState(STEPS.length - 1)
   const [isRunning, setIsRunning] = useState(false)
-  const intervalRef = useRef(null)
+  const [apiResult, setApiResult] = useState(null)   // real API response
+  const [apiError, setApiError] = useState(null)
+  const stepTimerRef = useRef(null)
 
-  useEffect(() => () => clearInterval(intervalRef.current), [])
+  useEffect(() => {
+    // Reset result when switching inquiry so mock view shows
+    setApiResult(null)
+    setApiError(null)
+    setStepIndex(STEPS.length - 1)
+  }, [activeInquiry])
 
-  const runPipeline = () => {
-    clearInterval(intervalRef.current)
-    setIsRunning(true)
+  useEffect(() => () => clearInterval(stepTimerRef.current), [])
+
+  const animateSteps = (onDone) => {
+    clearInterval(stepTimerRef.current)
     let step = 0
     setStepIndex(0)
-    intervalRef.current = setInterval(() => {
+    stepTimerRef.current = setInterval(() => {
       step += 1
-      if (step >= STEPS.length) {
-        clearInterval(intervalRef.current)
-        setIsRunning(false)
+      if (step >= STEPS.length - 1) {
+        clearInterval(stepTimerRef.current)
         setStepIndex(STEPS.length - 1)
+        onDone()
       } else {
         setStepIndex(step)
       }
-    }, 320)
+    }, 600)
+  }
+
+  const runPipeline = async () => {
+    if (isRunning) return
+    setIsRunning(true)
+    setApiResult(null)
+    setApiError(null)
+
+    const inquiry = INQUIRIES[activeInquiry]
+
+    // Start step animation concurrently with the API call
+    // The animation will run ahead and pause at "GPU Acceleration"
+    setStepIndex(1) // Synthesis (LLM)
+
+    try {
+      const res = await fetch('/api/benchmark', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: inquiry.query, task_type: inquiry.task_type }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.detail || `HTTP ${res.status}`)
+      }
+
+      const data = await res.json()
+      setStepIndex(STEPS.length - 1) // Resolution
+      setApiResult(data)
+    } catch (err) {
+      setApiError(err.message)
+      setStepIndex(STEPS.length - 1)
+    } finally {
+      setIsRunning(false)
+    }
   }
 
   const inquiry = INQUIRIES[activeInquiry]
-  const codeSnippet = CODE_SNIPPETS[inquiry.codeKey]
 
   return (
     <div className="mx-auto min-h-screen w-full max-w-6xl px-6 sm:px-10">
@@ -97,7 +139,7 @@ function Dashboard({
               query={inquiry.query}
               dataset={dataset}
               model={model}
-              actionLabel={isRunning ? 'Running…' : 'Execute'}
+              actionLabel={isRunning ? 'Running… (may take 3-5 min)' : 'Execute'}
               isRunning={isRunning}
               onExecute={runPipeline}
             />
@@ -106,15 +148,45 @@ function Dashboard({
 
         <ProcessStepper steps={STEPS} activeIndex={stepIndex} />
 
+        {/* Error banner */}
+        {apiError && (
+          <div className="rounded-xl border border-red-200 bg-red-50 px-5 py-3 text-sm text-red-700">
+            ⚠ API error: {apiError}
+          </div>
+        )}
+
+        {/* Benchmark timing strip — only after real API result */}
+        {apiResult && (
+          <BenchmarkStrip
+            cpuSeconds={apiResult.cpu.execution_time_sec}
+            gpuSeconds={apiResult.gpu.execution_time_sec}
+            note={`Wall time: ${apiResult.total_wall_time_sec.toFixed(1)}s`}
+          />
+        )}
+
         <Card>
           <SectionLabel className="mb-6">Output</SectionLabel>
-          <InquiryResults activeIndex={activeInquiry} />
+          <InquiryResults activeIndex={activeInquiry} apiResult={apiResult} />
         </Card>
 
         <SynthesizedLogic
           figures={[
-            { label: 'CPU Implementation', content: <CodeBlock code={codeSnippet.cpu} /> },
-            { label: 'GPU Implementation (cuDF)', content: <CodeBlock code={codeSnippet.gpu} /> },
+            {
+              label: 'CPU Implementation (pandas + sklearn)',
+              content: (
+                <CodeBlock
+                  code={apiResult?.cpu_code || '// Run a query to see the synthesized pandas code'}
+                />
+              ),
+            },
+            {
+              label: 'GPU Implementation (cuDF + cuML)',
+              content: (
+                <CodeBlock
+                  code={apiResult?.gpu_code || '// Run a query to see the synthesized cuDF code'}
+                />
+              ),
+            },
           ]}
         />
       </div>

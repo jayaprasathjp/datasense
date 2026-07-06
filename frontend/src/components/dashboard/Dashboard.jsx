@@ -1,42 +1,31 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import Masthead from './Masthead'
 import InquirySidebar from './InquirySidebar'
 import BriefPanel from './BriefPanel'
 import ProcessStepper from './ProcessStepper'
 import SynthesizedLogic from './SynthesizedLogic'
-import InquiryResults from './inquiries/InquiryResults'
+import InquiryOutput from './InquiryOutput'
 import Card from '../ui/Card'
 import SectionLabel from '../ui/SectionLabel'
-import { CODE_SNIPPETS } from '../../data/mockData'
-
-const INQUIRIES = [
-  {
-    label: 'Risk Classification (RF)',
-    query:
-      'Train a classifier to predict delay_risk_label from numeric features and return the top 20 highest-risk shipments with pred_risk probability.',
-    codeKey: 'riskClassification',
-  },
-  {
-    label: 'Time-Series Alerting',
-    query:
-      "Compute a 7-day rolling average parcel volume per distribution hub. Flag the top 10 hubs where today's volume is more than 30% above the rolling average.",
-    codeKey: 'timeSeriesAlerting',
-  },
-  {
-    label: 'Operational Triage',
-    query:
-      'Rank the top 25 shipments by operational priority using vehicle_breakdown_flag, ticket_age_hours, weather_severity, sentiment, and delay_cost.',
-    codeKey: 'operationalTriage',
-  },
-  {
-    label: 'Executive Summary',
-    query:
-      'Create a dashboard summary grouped by region and hub_tier showing total shipments, on-time rate, avg delay, vehicle breakdown rate, and avg sentiment.',
-    codeKey: 'executiveSummary',
-  },
-]
+import { INQUIRIES } from '../../data/inquiries'
+import { synthesizeCode, executeCpu, executeGpu } from '../../api/client'
 
 const STEPS = ['Acquisition', 'Synthesis (LLM)', 'CPU Baseline', 'GPU Acceleration', 'Resolution']
+
+const emptyRun = () => ({
+  stepStates: STEPS.map(() => 'pending'),
+  cpuCode: null,
+  gpuCode: null,
+  cpu: null,
+  gpu: null,
+  synthesisError: null,
+})
+
+function setAt(arr, index, value) {
+  const next = [...arr]
+  next[index] = value
+  return next
+}
 
 function CodeBlock({ code }) {
   return (
@@ -48,35 +37,96 @@ function CodeBlock({ code }) {
 
 function Dashboard({
   title = 'FleetPulse / GPU',
-  dataset = 'global_logistics_network (181K shipments)',
-  model = 'Gemma-4-E2B (LoRA)',
+  dataset = 'thelook_ecommerce.order_items (BigQuery)',
+  model = 'Gemma-4-E2B (LoRA) via Modal',
 }) {
   const [activeInquiry, setActiveInquiry] = useState(0)
-  const [stepIndex, setStepIndex] = useState(STEPS.length - 1)
-  const [isRunning, setIsRunning] = useState(false)
-  const intervalRef = useRef(null)
+  const [runs, setRuns] = useState({})
 
-  useEffect(() => () => clearInterval(intervalRef.current), [])
+  const currentRun = runs[activeInquiry] ?? emptyRun()
+  const isRunning = currentRun.stepStates.includes('active')
 
-  const runPipeline = () => {
-    clearInterval(intervalRef.current)
-    setIsRunning(true)
-    let step = 0
-    setStepIndex(0)
-    intervalRef.current = setInterval(() => {
-      step += 1
-      if (step >= STEPS.length) {
-        clearInterval(intervalRef.current)
-        setIsRunning(false)
-        setStepIndex(STEPS.length - 1)
-      } else {
-        setStepIndex(step)
-      }
-    }, 320)
+  const updateRun = (index, updater) => {
+    setRuns((prev) => ({ ...prev, [index]: updater(prev[index] ?? emptyRun()) }))
+  }
+
+  const runPipeline = async () => {
+    const index = activeInquiry
+    const inquiry = INQUIRIES[index]
+
+    updateRun(index, () => ({
+      ...emptyRun(),
+      stepStates: setAt(setAt(STEPS.map(() => 'pending'), 0, 'done'), 1, 'active'),
+    }))
+
+    let cpuCode
+    let gpuCode
+    try {
+      const synthesis = await synthesizeCode(inquiry.query, inquiry.taskType)
+      cpuCode = synthesis.cpu_code
+      gpuCode = synthesis.gpu_code
+      updateRun(index, (prev) => ({
+        ...prev,
+        cpuCode,
+        gpuCode,
+        stepStates: setAt(setAt(setAt(prev.stepStates, 1, 'done'), 2, 'active'), 3, 'active'),
+      }))
+    } catch (err) {
+      updateRun(index, (prev) => ({
+        ...prev,
+        synthesisError: err.message,
+        stepStates: setAt(prev.stepStates, 1, 'error'),
+      }))
+      return
+    }
+
+    const cpuPromise = executeCpu(cpuCode)
+      .then((res) => {
+        const cpuState =
+          res.status === 'success'
+            ? { status: 'done', seconds: res.execution_time_sec, results: res.results }
+            : { status: 'error', seconds: res.execution_time_sec, error: res.status }
+        updateRun(index, (prev) => ({
+          ...prev,
+          cpu: cpuState,
+          stepStates: setAt(prev.stepStates, 2, cpuState.status),
+        }))
+      })
+      .catch((err) => {
+        updateRun(index, (prev) => ({
+          ...prev,
+          cpu: { status: 'error', error: err.message },
+          stepStates: setAt(prev.stepStates, 2, 'error'),
+        }))
+      })
+
+    const gpuPromise = executeGpu(gpuCode)
+      .then((res) => {
+        const gpuState = {
+          status: 'done',
+          seconds: res.execution_time_sec,
+          results: res.results,
+          logs: res.logs,
+        }
+        updateRun(index, (prev) => ({
+          ...prev,
+          gpu: gpuState,
+          stepStates: setAt(prev.stepStates, 3, 'done'),
+        }))
+      })
+      .catch((err) => {
+        updateRun(index, (prev) => ({
+          ...prev,
+          gpu: { status: 'error', error: err.message },
+          stepStates: setAt(prev.stepStates, 3, 'error'),
+        }))
+      })
+
+    await Promise.allSettled([cpuPromise, gpuPromise])
+    updateRun(index, (prev) => ({ ...prev, stepStates: setAt(prev.stepStates, 4, 'done') }))
   }
 
   const inquiry = INQUIRIES[activeInquiry]
-  const codeSnippet = CODE_SNIPPETS[inquiry.codeKey]
 
   return (
     <div className="mx-auto min-h-screen w-full max-w-6xl px-6 sm:px-10">
@@ -104,19 +154,21 @@ function Dashboard({
           </div>
         </div>
 
-        <ProcessStepper steps={STEPS} activeIndex={stepIndex} />
+        <ProcessStepper steps={STEPS} stepStates={currentRun.stepStates} />
 
         <Card>
           <SectionLabel className="mb-6">Output</SectionLabel>
-          <InquiryResults activeIndex={activeInquiry} />
+          <InquiryOutput cpu={currentRun.cpu} gpu={currentRun.gpu} />
         </Card>
 
-        <SynthesizedLogic
-          figures={[
-            { label: 'CPU Implementation', content: <CodeBlock code={codeSnippet.cpu} /> },
-            { label: 'GPU Implementation (cuDF)', content: <CodeBlock code={codeSnippet.gpu} /> },
-          ]}
-        />
+        {(currentRun.cpuCode || currentRun.gpuCode) && (
+          <SynthesizedLogic
+            figures={[
+              { label: 'CPU Implementation', content: <CodeBlock code={currentRun.cpuCode} /> },
+              { label: 'GPU Implementation (cuDF)', content: <CodeBlock code={currentRun.gpuCode} /> },
+            ]}
+          />
+        )}
       </div>
     </div>
   )

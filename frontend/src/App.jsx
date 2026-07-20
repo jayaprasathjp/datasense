@@ -1,27 +1,35 @@
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import { getDatasetInfo, runBenchmark } from './api/client'
 import './index.css'
+
+const TASK_TYPES = [
+  { value: 'classification', label: 'Classification' },
+  { value: 'rolling_window', label: 'Rolling window / alerting' },
+  { value: 'ranking', label: 'Ranking / triage' },
+  { value: 'data_analysis', label: 'Aggregation / summary' },
+]
 
 const INQUIRIES = [
   {
-    label: 'I. Risk Classification (RF)',
+    label: 'Risk Classification (RF)',
     query: 'Train a classifier to predict risk_label from numeric columns (feat_1 to feat_4, price, qty, discount_pct, ticket_age_hours, sentiment, days_since_restock). Return the top 20 highest-risk rows with predicted probability as a new column called pred_risk.',
-    task_type: 'Risk scoring / classification',
+    task_type: 'classification',
     resultsTitle: 'Risk Classification Output',
   },
   {
-    label: 'II. Time-Series Alerting',
+    label: 'Time-Series Alerting',
     query: "Compute a 7-day rolling average revenue per store. Flag the top 10 stores where today's revenue is more than 20% below the rolling average. Return a dataframe of those anomalies.",
-    task_type: 'Time-series alerting',
+    task_type: 'rolling_window',
     resultsTitle: 'Anomalous Revenue Deterioration',
   },
   {
-    label: 'III. Operational Triage',
+    label: 'Operational Triage',
     query: 'Rank the top 25 rows by operational priority using return_flag, ticket_age_hours, days_since_restock, sentiment, and margin. Add a priority_score column and return the ranked dataframe.',
-    task_type: 'data_analysis',
+    task_type: 'ranking',
     resultsTitle: 'Operational Triage Matrix',
   },
   {
-    label: 'IV. Executive Summary',
+    label: 'Executive Summary',
     query: 'Create an aggregated dashboard summary grouped by region and support_tier. Show total revenue, average margin, return rate, average ticket_age_hours, and average sentiment.',
     task_type: 'data_analysis',
     resultsTitle: 'Cross-Regional Performance Extract',
@@ -29,7 +37,6 @@ const INQUIRIES = [
 ]
 
 const STEPS = ['Acquisition', 'Synthesis (LLM)', 'CPU Baseline', 'GPU Acceleration', 'Resolution']
-const ROMAN = ['I', 'II', 'III', 'IV', 'V']
 
 // Kaggle sweep results (static reference data from notebook Section D)
 const SWEEP_DATA = [
@@ -48,9 +55,9 @@ function formatVal(val) {
   return String(val)
 }
 
-function ResultsTable({ rows, title, count }) {
+function ResultsTable({ rows }) {
   if (!rows || rows.length === 0) return (
-    <p style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-lighter)', fontStyle: 'italic' }}>
+    <p style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--text-faint)' }}>
       No tabular output returned for this query.
     </p>
   )
@@ -79,9 +86,18 @@ function ResultsTable({ rows, title, count }) {
   )
 }
 
+function SearchIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="7" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  )
+}
+
 export default function App() {
-  const [activeIdx, setActiveIdx]     = useState(0)
   const [query, setQuery]             = useState(INQUIRIES[0].query)
+  const [taskType, setTaskType]       = useState(INQUIRIES[0].task_type)
   const [stepIdx, setStepIdx]         = useState(STEPS.length - 1)
   const [isRunning, setIsRunning]     = useState(false)
   const [apiResult, setApiResult]     = useState(null)
@@ -90,8 +106,18 @@ export default function App() {
   const [showSpeedup, setShowSpeedup] = useState(false)
   const [showResults, setShowResults] = useState(false)
   const [chartsVisible, setChartsVisible] = useState(false)
+  const [datasetInfo, setDatasetInfo] = useState(null)
+  const [datasetInfoError, setDatasetInfoError] = useState(null)
   const debugRef = useRef(null)
   const appendixRef = useRef(null)
+  const searchRef = useRef(null)
+
+  // Load dataset schema / row count / model label from the backend — no more guessing client-side.
+  useEffect(() => {
+    getDatasetInfo()
+      .then(setDatasetInfo)
+      .catch(err => setDatasetInfoError(err.message))
+  }, [])
 
   // Auto-scroll debug log
   useEffect(() => {
@@ -107,9 +133,7 @@ export default function App() {
 
   const addLog = (cls, text) => setDebugLines(prev => [...prev, { cls, text }])
 
-  const selectInquiry = (idx) => {
-    setActiveIdx(idx)
-    setQuery(INQUIRIES[idx].query)
+  const resetRunState = () => {
     setApiResult(null)
     setApiError(null)
     setShowSpeedup(false)
@@ -118,9 +142,27 @@ export default function App() {
     setDebugLines([{ cls: 'dl-sys', text: 'System initialized. Awaiting parameters.' }])
   }
 
+  const matchedIdx = INQUIRIES.findIndex(inq => inq.query === query)
+  const isCustom = matchedIdx === -1
+
+  const selectInquiry = (idx) => {
+    setQuery(INQUIRIES[idx].query)
+    setTaskType(INQUIRIES[idx].task_type)
+    resetRunState()
+  }
+
+  const selectCustom = () => {
+    setQuery('')
+    setTaskType(TASK_TYPES[0].value)
+    resetRunState()
+    setTimeout(() => searchRef.current?.focus(), 0)
+  }
+
+  const resultsTitle = isCustom ? 'Custom Query Results' : INQUIRIES[matchedIdx].resultsTitle
+  const canRun = query.trim().length > 0
+
   const runPipeline = async () => {
-    if (isRunning) return
-    const inquiry = INQUIRIES[activeIdx]
+    if (isRunning || !canRun) return
     setIsRunning(true)
     setApiResult(null)
     setApiError(null)
@@ -128,12 +170,10 @@ export default function App() {
     setShowResults(false)
     setDebugLines([])
 
-    // Step through pipeline visually
-    const stepDelay = (i) => new Promise(r => setTimeout(r, i * 800))
     setStepIdx(0)
     setTimeout(() => setStepIdx(1), 800)
 
-    addLog('dl-cmd', `> Engaging LLM synthesis: ${inquiry.task_type}`)
+    addLog('dl-cmd', `> Engaging LLM synthesis: ${taskType}`)
     addLog('dl-sys', '  [SYSTEM] Synthesizing code for standard CPU environment...')
 
     setTimeout(() => {
@@ -147,21 +187,11 @@ export default function App() {
     }, 2400)
 
     try {
-      const res = await fetch('/api/benchmark', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: inquiry.query, task_type: inquiry.task_type }),
-      })
-      if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.detail || `HTTP ${res.status}`)
-      }
-      const data = await res.json()
+      const data = await runBenchmark(query, taskType)
 
       setStepIdx(4)
       setApiResult(data)
 
-      // Log results
       const cpuS = data.cpu.execution_time_sec
       const gpuS = data.gpu.execution_time_sec
       const wallS = data.total_wall_time_sec
@@ -169,7 +199,6 @@ export default function App() {
       if (cpuS > 0) addLog('dl-ok', `  [SUCCESS] CPU execution concluded in ${cpuS.toFixed(3)}s`)
       if (gpuS > 0) addLog('dl-ok', `  [SUCCESS] GPU execution concluded in ${gpuS.toFixed(3)}s`)
 
-      // Log sandbox notes
       data.gpu.logs.slice(-3).forEach(l => addLog('dl-sys', `  [GPU] ${l}`))
       data.cpu.logs.slice(-3).forEach(l => addLog('dl-sys', `  [CPU] ${l}`))
 
@@ -178,7 +207,7 @@ export default function App() {
       if (cpuS > 0 && gpuS > 0) {
         const mult = cpuS / gpuS
         if (mult > 1) addLog('dl-ok', `  [RESULT] GPU is ${mult.toFixed(1)}x faster than CPU`)
-        else addLog('dl-fix', `  [RESULT] CPU is ${(1/mult).toFixed(1)}x faster at this scale`)
+        else addLog('dl-fix', `  [RESULT] CPU is ${(1 / mult).toFixed(1)}x faster at this scale`)
       }
 
       setTimeout(() => setShowResults(true), 300)
@@ -205,245 +234,279 @@ export default function App() {
     ? (apiResult.gpu?.results?.length > 0 ? apiResult.gpu.results : apiResult.cpu?.results ?? [])
     : []
 
-  const inquiry = INQUIRIES[activeIdx]
-
   return (
-    <div className="container">
-      {/* MASTHEAD */}
-      <header className="masthead">
-        <h1>DataSense / GPU</h1>
-        <div className="masthead-meta">
-          <span>Vol. 26 — No. 07</span>
-          <div className="status-indicator">
-            <span className="status-dot" />
-            RAPIDS Environment Online
-          </div>
-          <span>Data Architecture Review</span>
+    <div className="app-shell">
+      {/* SIDEBAR */}
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <span className="brand-mark">DS</span>
+          <div className="brand-name">DataSense<small>GPU Console</small></div>
         </div>
-      </header>
 
-      {/* THE BRIEF */}
-      <section className="brief-section">
-        <aside className="query-sidebar">
-          <span className="section-kicker">Select Inquiry</span>
-          <div className="query-pills">
-            {INQUIRIES.map((inq, i) => (
-              <button key={i} className={`qpill${i === activeIdx ? ' active' : ''}`} onClick={() => selectInquiry(i)}>
-                {inq.label}
-              </button>
-            ))}
+        <span className="sidebar-section-label">Select Inquiry</span>
+        <nav className="nav-list">
+          {INQUIRIES.map((inq, i) => (
+            <button
+              key={inq.label}
+              type="button"
+              className={`nav-item${matchedIdx === i ? ' active' : ''}`}
+              onClick={() => selectInquiry(i)}
+            >
+              <span className="nav-item-index">{String(i + 1).padStart(2, '0')}</span>
+              {inq.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="nav-divider" />
+        <button type="button" className={`nav-item nav-item-custom${isCustom ? ' active' : ''}`} onClick={selectCustom}>
+          <span className="nav-item-icon">+</span> Ask Your Own
+        </button>
+
+        <div className="sidebar-footer">
+          <span className="status-pill"><span className="dot" /> RAPIDS Environment Online</span>
+        </div>
+      </aside>
+
+      {/* MAIN */}
+      <main className="main">
+        <div className="page-header">
+          <div>
+            <h1 className="page-title">DataSense / GPU</h1>
+            <p className="page-subtitle">GPU-accelerated order intelligence — synthesize, benchmark, and compare CPU vs. GPU execution live.</p>
           </div>
-        </aside>
+          <span className="page-meta-tag">Data Architecture Console</span>
+        </div>
 
-        <main className="query-main">
-          <span className="section-kicker">The Brief</span>
-          <div className="query-input-wrapper">
+        {/* SEARCH */}
+        <div className="search-card">
+          <div className="search-bar">
+            <span className="search-icon"><SearchIcon /></span>
             <textarea
-              className="query-input"
-              rows={3}
+              ref={searchRef}
+              className="search-textarea"
+              rows={2}
               value={query}
               onChange={e => setQuery(e.target.value)}
-              placeholder="Formulate your inquiry..."
+              placeholder="Ask anything about the order data — e.g. “Find the 15 products with the fastest-growing sales this month.”"
             />
           </div>
-          <div className="run-action">
-            <div className="run-meta">
-              Dataset: Synthetic transactions (1M rows)<br />
-              Model: Gemma-4-E2B (LoRA) via Modal
+
+          <div className="meta-row">
+            <div className="meta-field">
+              <span className="meta-label">Analysis Type</span>
+              <select className="select-control" value={taskType} onChange={e => setTaskType(e.target.value)}>
+                {TASK_TYPES.map(t => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
             </div>
-            <button className="run-btn" disabled={isRunning} onClick={runPipeline}>
+
+            <div className="meta-field">
+              <span className="meta-label">Available Columns</span>
+              <div className="columns-pill-group">
+                {datasetInfo
+                  ? datasetInfo.columns.map(c => (
+                      <span key={c.name} className="col-pill" title={`${c.dtype} — ${c.description}`}>{c.name}</span>
+                    ))
+                  : <span className="col-pill col-pill-loading">{datasetInfoError ? 'Unavailable' : 'Loading…'}</span>}
+              </div>
+            </div>
+
+            <div className="system-info">
+              <div><b>Dataset</b>{datasetInfo ? `${datasetInfo.dataset_name} (${datasetInfo.row_count.toLocaleString()} rows)` : '—'}</div>
+              <div><b>Model</b>{datasetInfo ? datasetInfo.model_name : '—'}</div>
+            </div>
+          </div>
+
+          {datasetInfoError && (
+            <p className="dataset-info-warning">
+              Couldn't reach the backend for dataset info ({datasetInfoError}). Confirm the API is running and VITE_API_BASE_URL is set correctly.
+            </p>
+          )}
+
+          <div className="execute-row">
+            <button className="btn-primary" disabled={isRunning || !canRun} onClick={runPipeline}>
               {isRunning ? 'Running…' : 'Execute'}
             </button>
           </div>
-        </main>
-      </section>
-
-      {/* PIPELINE */}
-      <div className="pipeline">
-        {STEPS.map((step, i) => (
-          <div key={i} className={`pipe-step${i === stepIdx ? ' active' : i < stepIdx ? ' done' : ''}`}>
-            <span className="pipe-num">{ROMAN[i]}</span>
-            <span className="pipe-label">{step}</span>
-          </div>
-        ))}
-      </div>
-
-      {/* ERROR BANNER */}
-      {apiError && (
-        <div className="error-banner">⚠ API Error: {apiError}</div>
-      )}
-
-      {/* SYNTHESIZED LOGIC */}
-      <div className="logic-section">
-        <h2 className="section-title">Synthesized Logic</h2>
-        <div className="logic-grid">
-          <div className="figure">
-            <div className="figure-caption">
-              <span>Figure A: CPU Implementation</span>
-              <span className="caption-meta">{apiResult ? `${cpuS.toFixed(3)}s execution` : '—'}</span>
-            </div>
-            <div className="code-block">
-              {apiResult?.cpu_code
-                ? apiResult.cpu_code
-                : <span className="cm">// Awaiting synthesis...</span>
-              }
-            </div>
-          </div>
-          <div className="figure">
-            <div className="figure-caption">
-              <span>Figure B: GPU Implementation (cuDF)</span>
-              <span className="caption-meta">{apiResult ? `${gpuS.toFixed(3)}s execution` : '—'}</span>
-            </div>
-            <div className="code-block">
-              {apiResult?.gpu_code
-                ? apiResult.gpu_code
-                : <span className="cm">// Awaiting synthesis...</span>
-              }
-            </div>
-          </div>
         </div>
 
-        {/* DEBUG LOG */}
-        <div className="debug-log-wrapper" ref={debugRef}>
-          {debugLines.map((line, i) => (
-            <span key={i} className={`dl-line ${line.cls}`}>{line.text}</span>
+        {/* STEPPER */}
+        <div className="stepper">
+          {STEPS.map((step, i) => (
+            <Fragment key={step}>
+              <div className={`step${i === stepIdx ? ' active' : i < stepIdx ? ' done' : ''}`}>
+                <span className="step-badge">{i < stepIdx ? '✓' : i + 1}</span>
+                <span className="step-label">{step}</span>
+              </div>
+              {i < STEPS.length - 1 && <div className="step-connector" />}
+            </Fragment>
           ))}
         </div>
-      </div>
 
-      <hr className="separator" />
+        {/* ERROR BANNER */}
+        {apiError && (
+          <div className="error-banner">⚠ API error: {apiError}</div>
+        )}
 
-      {/* EXECUTION ANALYSIS */}
-      <div className="execution-section">
-        <h2 className="section-title">Execution Analysis</h2>
-        <div className="analysis-grid">
-          {/* Race bars */}
-          <div className="metrics-col">
-            <div className="race-container stacked">
-              <div className="race-row">
-                <div className="race-label cpu">
-                  <span>Standard CPU</span>
-                  <span className="race-timer">{apiResult ? `${cpuS.toFixed(3)}s` : '—'}</span>
-                </div>
-                <div className="race-track">
-                  <div className="race-fill cpu-fill" style={{ width: apiResult ? `${cpuPct}%` : '0%' }} />
-                </div>
+        {/* SYNTHESIZED LOGIC */}
+        <div className="panel">
+          <div className="panel-title">Synthesized Logic</div>
+          <div className="split-grid">
+            <div>
+              <div className="code-panel-header">
+                <span className="code-panel-title">CPU Implementation</span>
+                <span className="code-panel-meta">{apiResult ? `${cpuS.toFixed(3)}s` : '—'}</span>
               </div>
-              <div className="race-row">
-                <div className="race-label gpu">
-                  <span>Accelerated GPU</span>
-                  <span className="race-timer">{apiResult ? `${gpuS.toFixed(3)}s` : '—'}</span>
-                </div>
-                <div className="race-track">
-                  <div className="race-fill gpu-fill" style={{ width: apiResult ? `${gpuPct}%` : '0%' }} />
-                </div>
+              <div className="code-block">
+                {apiResult?.cpu_code
+                  ? apiResult.cpu_code
+                  : <span className="cm">// Awaiting synthesis...</span>}
               </div>
             </div>
-
-            <div className={`speedup-callout${showSpeedup ? ' visible' : ''}`}>
-              {speedupMult ? (
-                <>
-                  <div className={`speedup-huge${!gpuWins ? ' warn' : ''}`}>
-                    {gpuWins ? `${speedupMult.toFixed(1)}×` : `${(1/speedupMult).toFixed(1)}×`}
-                  </div>
-                  <div className="speedup-text">
-                    <h4>{gpuWins ? 'GPU Acceleration' : 'CPU Advantage'}</h4>
-                    <p>
-                      {gpuWins
-                        ? `GPU completed ${speedupMult.toFixed(1)}× faster than CPU baseline on this query.`
-                        : `CPU proved faster at this data scale. GPU excels at higher row counts.`
-                      }
-                    </p>
-                  </div>
-                </>
-              ) : (
-                <div className="speedup-text">
-                  <h4>Performance Multiplier</h4>
-                  <p>Execute a query to see real benchmark results.</p>
-                </div>
-              )}
+            <div>
+              <div className="code-panel-header">
+                <span className="code-panel-title">GPU Implementation (cuDF)</span>
+                <span className="code-panel-meta">{apiResult ? `${gpuS.toFixed(3)}s` : '—'}</span>
+              </div>
+              <div className="code-block">
+                {apiResult?.gpu_code
+                  ? apiResult.gpu_code
+                  : <span className="cm">// Awaiting synthesis...</span>}
+              </div>
             </div>
           </div>
 
-          {/* Results table */}
-          <div className="results-col">
-            <div className={`results-wrapper${showResults ? ' visible' : ''}`}>
-              <div className="results-header">
-                <h3 className="results-title">{inquiry.resultsTitle}</h3>
-                <span className="results-count">
-                  {liveRows.length > 0 ? `${liveRows.length} records` : '—'}
-                </span>
-              </div>
-              <ResultsTable rows={liveRows} />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <hr className="separator" />
-
-      {/* APPENDIX */}
-      <div className="appendix-grid" ref={appendixRef}>
-        <div>
-          <span className="section-kicker">Appendix A</span>
-          <h2 className="section-title" style={{ fontSize: '2rem' }}>Benchmarking at Scale</h2>
-          <p style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-light)', marginBottom: '2rem', maxWidth: '600px' }}>
-            Empirical evaluation of cuDF versus pandas across a 20,000,000 row dataset. Execution environment: NVIDIA Tesla T4.
-          </p>
-          <div className="chart-container">
-            {SWEEP_DATA.map((row, i) => (
-              <div key={i} className="chart-row">
-                <div className="chart-lbl">{row.label}<small>{row.sub}</small></div>
-                <div className="chart-bar-area">
-                  <div
-                    className={`chart-bar${row.type === 'gpu' ? ' gpu-bar' : row.type === 'slow' ? ' slow-bar' : ''}`}
-                    style={{ width: chartsVisible ? `${row.pct}%` : '0%' }}
-                  />
-                </div>
-                <div
-                  className="chart-val"
-                  style={{ color: row.type === 'gpu' ? 'var(--gpu-accent)' : row.type === 'slow' ? 'var(--alert)' : 'inherit' }}
-                >
-                  {row.val}×
-                </div>
-              </div>
+          <div className="debug-log" ref={debugRef}>
+            {debugLines.map((line, i) => (
+              <span key={i} className={`dl-line ${line.cls}`}>{line.text}</span>
             ))}
           </div>
         </div>
 
-        <div>
-          <span className="section-kicker">Appendix B</span>
-          <h2 className="section-title" style={{ fontSize: '2rem' }}>Key Metrics</h2>
-          <div className="stats-grid">
-            <div className="stat-box">
-              <div className="stat-val accent">
-                {speedupMult && gpuWins ? `${speedupMult.toFixed(1)}×` : '215×'}
+        {/* EXECUTION ANALYSIS */}
+        <div className="panel">
+          <div className="panel-title">Execution Analysis</div>
+          <div className="analysis-grid">
+            <div className="metrics-col">
+              <div className="race-container stacked">
+                <div className="race-row">
+                  <div className="race-label cpu">
+                    <span>Standard CPU</span>
+                    <span className="race-timer">{apiResult ? `${cpuS.toFixed(3)}s` : '—'}</span>
+                  </div>
+                  <div className="race-track">
+                    <div className="race-fill cpu-fill" style={{ width: apiResult ? `${cpuPct}%` : '0%' }} />
+                  </div>
+                </div>
+                <div className="race-row">
+                  <div className="race-label gpu">
+                    <span>Accelerated GPU</span>
+                    <span className="race-timer">{apiResult ? `${gpuS.toFixed(3)}s` : '—'}</span>
+                  </div>
+                  <div className="race-track">
+                    <div className="race-fill gpu-fill" style={{ width: apiResult ? `${gpuPct}%` : '0%' }} />
+                  </div>
+                </div>
               </div>
-              <div className="stat-lbl">{speedupMult && gpuWins ? 'Live GPU Speedup' : 'Peak RF Speedup'}</div>
+
+              <div className={`speedup-callout${showSpeedup ? ' visible' : ''}`}>
+                {speedupMult ? (
+                  <>
+                    <div className={`speedup-huge${!gpuWins ? ' warn' : ''}`}>
+                      {gpuWins ? `${speedupMult.toFixed(1)}×` : `${(1 / speedupMult).toFixed(1)}×`}
+                    </div>
+                    <div className="speedup-text">
+                      <h4>{gpuWins ? 'GPU Acceleration' : 'CPU Advantage'}</h4>
+                      <p>
+                        {gpuWins
+                          ? `GPU completed ${speedupMult.toFixed(1)}× faster than CPU baseline on this query.`
+                          : 'CPU proved faster at this data scale. GPU excels at higher row counts.'}
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <div className="speedup-text">
+                    <h4>Performance Multiplier</h4>
+                    <p>Execute a query to see real benchmark results.</p>
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="stat-box">
-              <div className="stat-val">58.9×</div>
-              <div className="stat-lbl">Rolling Window (20M)</div>
-            </div>
-            <div className="stat-box">
-              <div className="stat-val muted">{apiResult ? `${cpuS.toFixed(2)}s` : '81s'}</div>
-              <div className="stat-lbl">{apiResult ? 'CPU This Run' : 'CPU Baseline (RF)'}</div>
-            </div>
-            <div className="stat-box">
-              <div className="stat-val">{apiResult ? `${gpuS.toFixed(2)}s` : '0.38s'}</div>
-              <div className="stat-lbl">{apiResult ? 'GPU This Run' : 'GPU Execution (RF)'}</div>
-            </div>
-            <div className="stat-box">
-              <div className="stat-val">1M</div>
-              <div className="stat-lbl">Records Processed</div>
-            </div>
-            <div className="stat-box">
-              <div className="stat-val">8/8</div>
-              <div className="stat-lbl">Synthesis Success</div>
+
+            <div className="results-col">
+              <div className={`results-wrapper${showResults ? ' visible' : ''}`}>
+                <div className="results-header">
+                  <h3 className="results-title">{resultsTitle}</h3>
+                  <span className="results-count">
+                    {liveRows.length > 0 ? `${liveRows.length} records` : '—'}
+                  </span>
+                </div>
+                <ResultsTable rows={liveRows} />
+              </div>
             </div>
           </div>
         </div>
-      </div>
+
+        {/* APPENDIX */}
+        <div className="appendix-grid" ref={appendixRef}>
+          <div className="panel">
+            <span className="kicker">Appendix A</span>
+            <div className="panel-title">Benchmarking at Scale</div>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1.5rem', maxWidth: '520px' }}>
+              Empirical evaluation of cuDF versus pandas across a 20,000,000 row dataset. Execution environment: NVIDIA Tesla T4.
+            </p>
+            <div>
+              {SWEEP_DATA.map((row) => (
+                <div key={row.label} className="chart-row">
+                  <div className="chart-lbl">{row.label}<small>{row.sub}</small></div>
+                  <div className="chart-bar-area">
+                    <div
+                      className={`chart-bar${row.type === 'gpu' ? ' gpu-bar' : row.type === 'slow' ? ' slow-bar' : ''}`}
+                      style={{ width: chartsVisible ? `${row.pct}%` : '0%' }}
+                    />
+                  </div>
+                  <div className="chart-val">{row.val}×</div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="panel">
+            <span className="kicker">Appendix B</span>
+            <div className="panel-title">Key Metrics</div>
+            <div className="stats-grid">
+              <div className="stat-box">
+                <div className="stat-val accent">
+                  {speedupMult && gpuWins ? `${speedupMult.toFixed(1)}×` : '215×'}
+                </div>
+                <div className="stat-lbl">{speedupMult && gpuWins ? 'Live GPU Speedup' : 'Peak RF Speedup'}</div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-val">58.9×</div>
+                <div className="stat-lbl">Rolling Window (20M)</div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-val muted">{apiResult ? `${cpuS.toFixed(2)}s` : '81s'}</div>
+                <div className="stat-lbl">{apiResult ? 'CPU This Run' : 'CPU Baseline (RF)'}</div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-val">{apiResult ? `${gpuS.toFixed(2)}s` : '0.38s'}</div>
+                <div className="stat-lbl">{apiResult ? 'GPU This Run' : 'GPU Execution (RF)'}</div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-val">1M</div>
+                <div className="stat-lbl">Records Processed</div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-val">8/8</div>
+                <div className="stat-lbl">Synthesis Success</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
     </div>
   )
 }

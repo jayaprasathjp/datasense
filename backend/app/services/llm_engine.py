@@ -5,6 +5,10 @@ from app.data.bigquery import DATASET_SCHEMA
 
 logger = logging.getLogger(__name__)
 
+# Human-readable label for the model powering code synthesis — surfaced to the
+# frontend via /api/dataset-info instead of being hardcoded client-side.
+MODEL_NAME = "Gemma-4-E2B (LoRA) via Modal"
+
 CUDF_CHEATSHEET = """
 # ════════════════════════════════════════════════════════════════
 # cuDF / cuML CHEAT-SHEET  (few-shot examples — read carefully)

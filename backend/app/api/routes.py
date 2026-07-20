@@ -4,10 +4,22 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
-from app.services.llm_engine import synthesize_code, synthesize_cpu_code
+from app.services.llm_engine import synthesize_code, synthesize_cpu_code, MODEL_NAME
 from app.services.modal_sandbox import execute_on_gpu, execute_on_cpu
+from app.data.bigquery import get_dataset_info
 
 router = APIRouter()
+
+class DatasetColumn(BaseModel):
+    name: str
+    dtype: str
+    description: str
+
+class DatasetInfoResponse(BaseModel):
+    dataset_name: str
+    row_count: int
+    model_name: str
+    columns: List[DatasetColumn]
 
 class SynthesizeRequest(BaseModel):
     query: str
@@ -39,6 +51,13 @@ class BenchmarkResponse(BaseModel):
     gpu: BenchmarkResult
     cpu: BenchmarkResult
     total_wall_time_sec: float
+
+
+@router.get("/api/dataset-info", response_model=DatasetInfoResponse)
+def dataset_info():
+    """Dataset schema, row count, and model label — single source of truth for the frontend."""
+    info = get_dataset_info()
+    return DatasetInfoResponse(**info, model_name=MODEL_NAME)
 
 
 @router.post("/api/synthesize", response_model=SynthesizeResponse)

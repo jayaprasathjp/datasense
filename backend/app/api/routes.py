@@ -4,10 +4,24 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
-from app.services.llm_engine import synthesize_code, synthesize_cpu_code
+from app.services.llm_engine import synthesize_code, synthesize_cpu_code, MODEL_NAME
 from app.services.modal_sandbox import execute_on_gpu, execute_on_cpu
+from app.services.query_validator import validate_query
+from app.services.risk_ranking import enrich_results
+from app.data.bigquery import get_dataset_info
 
 router = APIRouter()
+
+class DatasetColumn(BaseModel):
+    name: str
+    dtype: str
+    description: str
+
+class DatasetInfoResponse(BaseModel):
+    dataset_name: str
+    row_count: int
+    model_name: str
+    columns: List[DatasetColumn]
 
 class SynthesizeRequest(BaseModel):
     query: str
@@ -41,8 +55,19 @@ class BenchmarkResponse(BaseModel):
     total_wall_time_sec: float
 
 
+@router.get("/api/dataset-info", response_model=DatasetInfoResponse)
+def dataset_info():
+    """Dataset schema, row count, and model label — single source of truth for the frontend."""
+    info = get_dataset_info()
+    return DatasetInfoResponse(**info, model_name=MODEL_NAME)
+
+
 @router.post("/api/synthesize", response_model=SynthesizeResponse)
 def synthesize(request: SynthesizeRequest):
+    is_relevant, reason = validate_query(request.query)
+    if not is_relevant:
+        raise HTTPException(status_code=400, detail=reason)
+
     try:
         # Each backend gets its own LLM call with the correct system prompt
         gpu_code = synthesize_code(request.query, request.task_type)
@@ -95,6 +120,10 @@ def benchmark(request: SynthesizeRequest):
     Modal Sandboxes stay alive because .exec() is called immediately
     after create() within the same thread — no race condition.
     """
+    is_relevant, reason = validate_query(request.query)
+    if not is_relevant:
+        raise HTTPException(status_code=400, detail=reason)
+
     t_start = time.perf_counter()
 
     def run_gpu():
@@ -118,20 +147,25 @@ def benchmark(request: SynthesizeRequest):
 
         total_wall = time.perf_counter() - t_start
 
+        # Rank + recommendation, rule-based — only kicks in for the risk/alert
+        # task types (classification, rolling_window, ranking); no-op otherwise.
+        gpu_results = enrich_results(gpu_res["results"], request.task_type)
+        cpu_results = enrich_results(cpu_res["results"], request.task_type)
+
         return BenchmarkResponse(
             gpu_code=gpu_res.get("code", ""),
             cpu_code=cpu_res.get("code", ""),
             gpu=BenchmarkResult(
                 execution_time_sec=gpu_res["execution_time_sec"],
                 warmup_time_sec=gpu_res["warmup_time_sec"],
-                results=gpu_res["results"],
+                results=gpu_results,
                 logs=gpu_res["logs"],
                 status="success",
             ),
             cpu=BenchmarkResult(
                 execution_time_sec=cpu_res["execution_time_sec"],
                 warmup_time_sec=cpu_res["warmup_time_sec"],
-                results=cpu_res["results"],
+                results=cpu_results,
                 logs=cpu_res["logs"],
                 status="success",
             ),

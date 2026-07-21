@@ -5,6 +5,10 @@ from app.data.bigquery import DATASET_SCHEMA
 
 logger = logging.getLogger(__name__)
 
+# Human-readable label for the model powering code synthesis — surfaced to the
+# frontend via /api/dataset-info instead of being hardcoded client-side.
+MODEL_NAME = "Gemma-4-E2B (LoRA) via Modal"
+
 CUDF_CHEATSHEET = """
 # ════════════════════════════════════════════════════════════════
 # cuDF / cuML CHEAT-SHEET  (few-shot examples — read carefully)
@@ -97,7 +101,7 @@ def _call_modal(system_prompt: str, user_prompt: str) -> str:
     """Helper to send prompt to the Modal vLLM serverless inference endpoint."""
     if not settings.modal_url or not settings.modal_api_key:
         raise ValueError("MODAL_URL or MODAL_API_KEY is not set in the environment variables.")
-        
+
     logger.info(f"Sending prompt to Modal LLM Endpoint: {settings.modal_url}")
     
     headers = {
@@ -216,3 +220,29 @@ Output ONLY the corrected valid Python code. No markdown, no explanations.
     
     model_output = _call_modal(sys_prompt, user_prompt)
     return _extract_code(model_output)
+
+
+RELEVANCE_SYSTEM_PROMPT = (
+    "You are a strict relevance classifier for a data analytics platform.\n"
+    "You are given a dataset schema and a user's natural language question.\n"
+    "Decide whether the question can plausibly be answered using ONLY the columns in the schema.\n"
+    "Respond with EXACTLY one word: YES or NO. Nothing else."
+)
+
+
+def check_query_relevance(query: str) -> bool | None:
+    """
+    Best-effort LLM relevance check, used as a fallback when the cheap keyword
+    heuristic (see app.services.query_validator) finds no signal at all.
+
+    Returns True/False, or None if the LLM call itself fails (e.g. Modal
+    credentials not configured) — callers should treat None as "unknown" and
+    fall back to a conservative default rather than raising.
+    """
+    user_prompt = f"Dataset schema:\n{DATASET_SCHEMA}\n\nUser question: {query}\n"
+    try:
+        output = _call_modal(RELEVANCE_SYSTEM_PROMPT, user_prompt)
+    except Exception as e:
+        logger.warning(f"Relevance check LLM call failed, falling back to heuristic only: {e}")
+        return None
+    return output.strip().upper().startswith("YES")

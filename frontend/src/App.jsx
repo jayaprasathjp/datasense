@@ -55,6 +55,17 @@ function formatVal(val) {
   return String(val)
 }
 
+// Backend rank/recommendation bands are always phrased from most- to least-urgent
+// (see backend/app/services/risk_ranking.py) — map that language to a tone color
+// rather than duplicating the band thresholds on the frontend.
+function recommendationTone(text) {
+  const t = String(text).toLowerCase()
+  if (t.includes('immediately') || t.includes('escalate') || t.includes('handle first')) return 'danger'
+  if (t.includes('soon') || t.includes('high priority') || t.includes('elevated')) return 'warning'
+  if (t.includes('monitor') || t.includes('standard priority')) return 'accent'
+  return 'success'
+}
+
 function ResultsTable({ rows }) {
   if (!rows || rows.length === 0) return (
     <p style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--text-faint)' }}>
@@ -68,16 +79,28 @@ function ResultsTable({ rows }) {
         <thead>
           <tr>
             {columns.map(col => (
-              <th key={col} className="n">{col.replace(/_/g, ' ')}</th>
+              <th key={col} className={col === 'rank' ? 'rank-col' : col === 'recommendation' ? '' : 'n'}>
+                {col === 'rank' ? '#' : col.replace(/_/g, ' ')}
+              </th>
             ))}
           </tr>
         </thead>
         <tbody>
           {rows.slice(0, 25).map((row, i) => (
             <tr key={i}>
-              {columns.map(col => (
-                <td key={col} className="n">{formatVal(row[col])}</td>
-              ))}
+              {columns.map(col => {
+                if (col === 'rank') {
+                  return <td key={col} className="rank-col"><span className="rank-badge">{row[col]}</span></td>
+                }
+                if (col === 'recommendation') {
+                  return (
+                    <td key={col}>
+                      <span className={`rec-pill rec-${recommendationTone(row[col])}`}>{row[col]}</span>
+                    </td>
+                  )
+                }
+                return <td key={col} className="n">{formatVal(row[col])}</td>
+              })}
             </tr>
           ))}
         </tbody>
@@ -170,25 +193,31 @@ export default function App() {
     setShowResults(false)
     setDebugLines([])
 
-    setStepIdx(0)
-    setTimeout(() => setStepIdx(1), 800)
+    // Track every step-animation timer so we can cancel the ones still pending
+    // if the real response comes back early — otherwise a late timeout fires
+    // AFTER we've already set the final step and drags the indicator backward.
+    const stepTimers = []
+    stepTimers.push(setTimeout(() => setStepIdx(1), 800))
 
     addLog('dl-cmd', `> Engaging LLM synthesis: ${taskType}`)
     addLog('dl-sys', '  [SYSTEM] Synthesizing code for standard CPU environment...')
 
-    setTimeout(() => {
+    stepTimers.push(setTimeout(() => {
       setStepIdx(2)
       addLog('dl-sys', '  [SYSTEM] Synthesizing code for accelerated GPU environment...')
-    }, 1600)
+    }, 1600))
 
-    setTimeout(() => {
+    stepTimers.push(setTimeout(() => {
       setStepIdx(3)
       addLog('dl-sys', '  [PROCESS] Initializing Modal sandboxes (CPU + GPU concurrently)...')
-    }, 2400)
+    }, 2400))
+
+    setStepIdx(0)
 
     try {
       const data = await runBenchmark(query, taskType)
 
+      stepTimers.forEach(clearTimeout)
       setStepIdx(4)
       setApiResult(data)
 
@@ -214,6 +243,7 @@ export default function App() {
       setTimeout(() => setShowSpeedup(true), 600)
 
     } catch (err) {
+      stepTimers.forEach(clearTimeout)
       setApiError(err.message)
       setStepIdx(STEPS.length - 1)
       addLog('dl-err', `  [FAULT] ${err.message}`)

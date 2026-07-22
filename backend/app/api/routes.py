@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 from app.services.llm_engine import synthesize_code, synthesize_cpu_code, MODEL_NAME
-from app.services.modal_sandbox import execute_on_gpu, execute_on_cpu
+from app.services.modal_sandbox import execute_on_gpu, execute_on_cpu, confidence_from_attempts
 from app.services.query_validator import validate_query
 from app.services.risk_ranking import enrich_results
 from app.data.bigquery import get_dataset_info
@@ -40,12 +40,16 @@ class ExecuteResponse(BaseModel):
     results: Optional[List[Dict[str, Any]]] = None
     logs: List[str] = []
     status: str = "success"
+    attempts_used: int = 1
+    confidence: str = "high"  # "high" | "medium" | "low" — derived from attempts_used
 class BenchmarkResult(BaseModel):
     execution_time_sec: float
     warmup_time_sec: float = 0.0
     results: Optional[List[Dict[str, Any]]] = None
     logs: List[str] = []
     status: str = "success"
+    attempts_used: int = 1
+    confidence: str = "high"  # "high" | "medium" | "low" — derived from attempts_used
 
 class BenchmarkResponse(BaseModel):
     gpu_code: str
@@ -81,12 +85,15 @@ def execute_cpu(request: ExecuteRequest):
     """Execute pandas code on CPU inside a Modal CPU Sandbox for fair benchmarking."""
     try:
         response_data = execute_on_cpu(request.code)
+        attempts_used = response_data.get("attempts_used", 1)
         return ExecuteResponse(
             execution_time_sec=response_data["execution_time_sec"],
             warmup_time_sec=response_data["warmup_time_sec"],
             results=response_data["results"],
             logs=response_data["logs"],
-            status="success"
+            status="success",
+            attempts_used=attempts_used,
+            confidence=confidence_from_attempts(attempts_used),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -96,12 +103,15 @@ def execute_gpu(request: ExecuteRequest):
     """Execute cuDF code on GPU (T4) inside a Modal GPU Sandbox for fair benchmarking."""
     try:
         response_data = execute_on_gpu(request.code)
+        attempts_used = response_data.get("attempts_used", 1)
         return ExecuteResponse(
             execution_time_sec=response_data["execution_time_sec"],
             warmup_time_sec=response_data["warmup_time_sec"],
             results=response_data["results"],
             logs=response_data["logs"],
-            status="success"
+            status="success",
+            attempts_used=attempts_used,
+            confidence=confidence_from_attempts(attempts_used),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -152,6 +162,9 @@ def benchmark(request: SynthesizeRequest):
         gpu_results = enrich_results(gpu_res["results"], request.task_type)
         cpu_results = enrich_results(cpu_res["results"], request.task_type)
 
+        gpu_attempts = gpu_res.get("attempts_used", 1)
+        cpu_attempts = cpu_res.get("attempts_used", 1)
+
         return BenchmarkResponse(
             gpu_code=gpu_res.get("code", ""),
             cpu_code=cpu_res.get("code", ""),
@@ -161,6 +174,8 @@ def benchmark(request: SynthesizeRequest):
                 results=gpu_results,
                 logs=gpu_res["logs"],
                 status="success",
+                attempts_used=gpu_attempts,
+                confidence=confidence_from_attempts(gpu_attempts),
             ),
             cpu=BenchmarkResult(
                 execution_time_sec=cpu_res["execution_time_sec"],
@@ -168,6 +183,8 @@ def benchmark(request: SynthesizeRequest):
                 results=cpu_results,
                 logs=cpu_res["logs"],
                 status="success",
+                attempts_used=cpu_attempts,
+                confidence=confidence_from_attempts(cpu_attempts),
             ),
             total_wall_time_sec=round(total_wall, 3),
         )

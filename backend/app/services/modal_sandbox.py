@@ -292,7 +292,21 @@ def execute_in_modal(user_code: str, mode: str = "gpu") -> dict:
         "warmup_time_sec": warmup_time if warmup_time is not None else 0.0,
         "results": final_results if isinstance(final_results, list) else [final_results],
         "logs": logs,
+        "attempts_used": attempt,
     }
+
+
+def confidence_from_attempts(attempts: int) -> str:
+    """
+    Reliability tier for a result, derived from how many attempts it took.
+    Scales with MAX_RETRIES rather than hardcoding attempt counts, so this
+    stays correct if the retry budget changes.
+    """
+    if attempts <= 1:
+        return "high"
+    if attempts >= MAX_RETRIES:
+        return "low"
+    return "medium"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

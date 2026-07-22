@@ -66,6 +66,23 @@ function recommendationTone(text) {
   return 'success'
 }
 
+// Reliability signal derived from how many attempts the backend needed to
+// produce this answer (see backend/app/services/modal_sandbox.py::confidence_from_attempts).
+// The backend already picks the tier — this just paints it.
+function ConfidenceBadge({ attemptsUsed, confidence }) {
+  if (!confidence || !attemptsUsed) return null
+  const tone = confidence === 'high' ? 'success' : confidence === 'medium' ? 'warning' : 'danger'
+  const label = attemptsUsed === 1 ? '1st-try' : `${attemptsUsed} attempts`
+  return (
+    <span
+      className={`rec-pill rec-${tone}`}
+      title={`Succeeded after ${attemptsUsed} attempt${attemptsUsed > 1 ? 's' : ''} — ${confidence} confidence`}
+    >
+      {label}
+    </span>
+  )
+}
+
 function ResultsTable({ rows }) {
   if (!rows || rows.length === 0) return (
     <p style={{ fontFamily: 'var(--sans)', fontSize: '0.82rem', color: 'var(--text-faint)' }}>
@@ -387,7 +404,12 @@ export default function App() {
             <div>
               <div className="code-panel-header">
                 <span className="code-panel-title">CPU Implementation</span>
-                <span className="code-panel-meta">{apiResult ? `${cpuS.toFixed(3)}s` : '—'}</span>
+                <span className="code-panel-meta-group">
+                  <span className="code-panel-meta">{apiResult ? `${cpuS.toFixed(3)}s` : '—'}</span>
+                  {apiResult?.cpu && (
+                    <ConfidenceBadge attemptsUsed={apiResult.cpu.attempts_used} confidence={apiResult.cpu.confidence} />
+                  )}
+                </span>
               </div>
               <div className="code-block">
                 {apiResult?.cpu_code
@@ -398,7 +420,12 @@ export default function App() {
             <div>
               <div className="code-panel-header">
                 <span className="code-panel-title">GPU Implementation (cuDF)</span>
-                <span className="code-panel-meta">{apiResult ? `${gpuS.toFixed(3)}s` : '—'}</span>
+                <span className="code-panel-meta-group">
+                  <span className="code-panel-meta">{apiResult ? `${gpuS.toFixed(3)}s` : '—'}</span>
+                  {apiResult?.gpu && (
+                    <ConfidenceBadge attemptsUsed={apiResult.gpu.attempts_used} confidence={apiResult.gpu.confidence} />
+                  )}
+                </span>
               </div>
               <div className="code-block">
                 {apiResult?.gpu_code

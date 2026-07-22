@@ -184,26 +184,48 @@ def get_dataframe() -> pd.DataFrame:
     return global_df
 
 
-# Schema description for LLM prompts
-DATASET_SCHEMA = """
-Columns available in `df`:
-  - store_id: int32         (0–249)
-  - product_id: int32       (0–1999)
-  - date: datetime64        (2024-01-01 to 2024-12-31)
-  - region: int8            (0–7)
-  - qty: int16              (1–9, units sold)
-  - price: float64          (unit price in USD)
-  - discount_pct: float64   (0.0–0.35)
-  - return_flag: int8       (1 = returned, 0 = kept)
-  - support_tier: int8      (1–4)
-  - sentiment: float64      (customer sentiment score, ~N(0,1))
-  - ticket_age_hours: float64
-  - days_since_restock: int16
-  - feat_1 … feat_4: float64 (numeric features)
-  - revenue: float64        (qty × price × (1 − discount_pct))
-  - margin: float64
-  - risk_score: float64     (0–1, composite risk)
-  - risk_label: int8        (1 = high risk, top 25%)
-  - target_flag: int8       (alias for risk_label)
-  - target_value: float64   (alias for risk_score)
-""".strip()
+# ─────────────────────────────────────────────────────────────────────────────
+# Single source of truth for the `df` schema — used to build both the LLM
+# prompt (DATASET_SCHEMA) and the /api/dataset-info response consumed by the
+# frontend, so the UI can never drift from what the model is actually told.
+# ─────────────────────────────────────────────────────────────────────────────
+DATASET_COLUMNS = [
+    {"name": "store_id",           "dtype": "int32",      "description": "Store identifier (0–249)"},
+    {"name": "product_id",         "dtype": "int32",      "description": "Product identifier (0–1999)"},
+    {"name": "date",               "dtype": "datetime64", "description": "Transaction date (2024-01-01 to 2024-12-31)"},
+    {"name": "region",             "dtype": "int8",       "description": "Region code (0–7)"},
+    {"name": "qty",                "dtype": "int16",      "description": "Units sold (1–9)"},
+    {"name": "price",              "dtype": "float64",    "description": "Unit price in USD"},
+    {"name": "discount_pct",       "dtype": "float64",    "description": "Discount fraction (0.0–0.35)"},
+    {"name": "return_flag",        "dtype": "int8",       "description": "1 = returned, 0 = kept"},
+    {"name": "support_tier",       "dtype": "int8",       "description": "Support tier (1–4)"},
+    {"name": "sentiment",          "dtype": "float64",    "description": "Customer sentiment score, ~N(0,1)"},
+    {"name": "ticket_age_hours",   "dtype": "float64",    "description": "Age of the support ticket in hours"},
+    {"name": "days_since_restock", "dtype": "int16",      "description": "Days since the product was last restocked"},
+    {"name": "feat_1",             "dtype": "float64",    "description": "Numeric feature 1"},
+    {"name": "feat_2",             "dtype": "float64",    "description": "Numeric feature 2"},
+    {"name": "feat_3",             "dtype": "float64",    "description": "Numeric feature 3"},
+    {"name": "feat_4",             "dtype": "float64",    "description": "Numeric feature 4"},
+    {"name": "revenue",            "dtype": "float64",    "description": "qty × price × (1 − discount_pct)"},
+    {"name": "margin",             "dtype": "float64",    "description": "Gross margin in USD"},
+    {"name": "risk_score",         "dtype": "float64",    "description": "Composite risk score (0–1)"},
+    {"name": "risk_label",         "dtype": "int8",       "description": "1 = high risk (top 25% by risk_score)"},
+    {"name": "target_flag",        "dtype": "int8",       "description": "Alias for risk_label"},
+    {"name": "target_value",       "dtype": "float64",    "description": "Alias for risk_score"},
+]
+
+# Schema description for LLM prompts — generated from DATASET_COLUMNS above.
+DATASET_SCHEMA = "Columns available in `df`:\n" + "\n".join(
+    f"  - {c['name']}: {c['dtype']:<10} ({c['description']})" for c in DATASET_COLUMNS
+)
+
+DATASET_NAME = "BigQuery thelook_ecommerce (synthetic-augmented)"
+
+
+def get_dataset_info() -> dict:
+    """Static metadata describing the dataset served to the LLM/sandboxes, for the frontend."""
+    return {
+        "dataset_name": DATASET_NAME,
+        "row_count": N_ROWS,
+        "columns": DATASET_COLUMNS,
+    }

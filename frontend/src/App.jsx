@@ -153,8 +153,12 @@ export default function App() {
         body: JSON.stringify({ query: inquiry.query, task_type: inquiry.task_type }),
       })
       if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.detail || `HTTP ${res.status}`)
+        let errMsg = `HTTP ${res.status}`
+        try {
+          const err = await res.json()
+          errMsg = err.detail || errMsg
+        } catch { /* response body wasn't JSON */ }
+        throw new Error(errMsg)
       }
       const data = await res.json()
 

@@ -6,6 +6,7 @@ import time
 import threading
 
 import modal
+from modal.exception import AuthError
 
 from app.core.config import settings
 from app.data.bigquery import PARQUET_FILE_PATH
@@ -268,6 +269,11 @@ def execute_in_modal(user_code: str, mode: str = "gpu") -> dict:
             logs.append("Execution successful.")
             break  # done
 
+        except AuthError as exc:
+            error_msg = f"{type(exc).__name__}: {exc}"
+            logger.error(f"Modal AuthError on attempt {attempt}: {error_msg}")
+            logs.append(f"AuthError: {error_msg}")
+            break  # fail fast — retrying won't fix bad credentials
         except Exception as exc:
             error_msg = f"{type(exc).__name__}: {exc}"
             logger.error(f"Modal Sandbox error on attempt {attempt}: {error_msg}")
@@ -414,6 +420,11 @@ def execute_on_prewarmed_sandbox(sb: modal.Sandbox, user_code: str, mode: str) -
             logs.append("Execution successful.")
             break
 
+        except AuthError as exc:
+            error_msg = f"{type(exc).__name__}: {exc}"
+            logger.error(f"AuthError on pre-warmed sandbox: {error_msg}")
+            logs.append(f"AuthError: {error_msg}")
+            break
         except Exception as exc:
             error_msg = f"{type(exc).__name__}: {exc}"
             logger.error(f"Execution error on pre-warmed sandbox attempt {attempt}: {error_msg}")

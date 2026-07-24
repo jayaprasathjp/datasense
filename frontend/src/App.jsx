@@ -41,12 +41,12 @@ const STEPS = ['Acquisition', 'Synthesis (LLM)', 'CPU Baseline', 'GPU Accelerati
 // Kaggle sweep results (static reference data from notebook Section D)
 const SWEEP_DATA = [
   { label: 'Time-series alerting', sub: 'rolling_window', val: 58.9, pct: 100, type: 'gpu' },
-  { label: 'Dashboard enrichment', sub: 'merge_join',     val: 39.8, pct: 67,  type: 'gpu' },
-  { label: 'Priority ranking',     sub: 'sort_values',    val: 21.1, pct: 36,  type: 'ink' },
-  { label: 'BI aggregation',       sub: 'groupby_agg',    val: 18.4, pct: 31,  type: 'ink' },
-  { label: 'Risk modeling (5M)',   sub: 'rf_classify_fit', val: 15.7, pct: 27, type: 'ink' },
-  { label: 'Forecasting',          sub: 'linreg_fit',     val: 11.7, pct: 20,  type: 'ink' },
-  { label: 'Segmentation (weak)',  sub: 'kmeans_fit',     val: 3.0,  pct: 5,   type: 'slow' },
+  { label: 'Dashboard enrichment', sub: 'merge_join', val: 39.8, pct: 67, type: 'gpu' },
+  { label: 'Priority ranking', sub: 'sort_values', val: 21.1, pct: 36, type: 'ink' },
+  { label: 'BI aggregation', sub: 'groupby_agg', val: 18.4, pct: 31, type: 'ink' },
+  { label: 'Risk modeling (5M)', sub: 'rf_classify_fit', val: 15.7, pct: 27, type: 'ink' },
+  { label: 'Forecasting', sub: 'linreg_fit', val: 11.7, pct: 20, type: 'ink' },
+  { label: 'Segmentation (weak)', sub: 'kmeans_fit', val: 3.0, pct: 5, type: 'slow' },
 ]
 
 function formatVal(val) {
@@ -80,6 +80,19 @@ function ConfidenceBadge({ attemptsUsed, confidence }) {
     >
       {label}
     </span>
+  )
+}
+
+// One-line plain-language bridge between "here is a dataframe" and "here is
+// an insight" — see backend/app/services/insight_summary.py for how the
+// sentence is derived.
+function SummaryCard({ text }) {
+  if (!text) return null
+  return (
+    <div className="summary-card">
+      <span className="summary-badge">Insight</span>
+      <p className="summary-text">{text}</p>
+    </div>
   )
 }
 
@@ -136,13 +149,13 @@ function SearchIcon() {
 }
 
 export default function App() {
-  const [query, setQuery]             = useState(INQUIRIES[0].query)
-  const [taskType, setTaskType]       = useState(INQUIRIES[0].task_type)
-  const [stepIdx, setStepIdx]         = useState(STEPS.length - 1)
-  const [isRunning, setIsRunning]     = useState(false)
-  const [apiResult, setApiResult]     = useState(null)
-  const [apiError, setApiError]       = useState(null)
-  const [debugLines, setDebugLines]   = useState([{ cls: 'dl-sys', text: 'System initialized. Awaiting parameters.' }])
+  const [query, setQuery] = useState(INQUIRIES[0].query)
+  const [taskType, setTaskType] = useState(INQUIRIES[0].task_type)
+  const [stepIdx, setStepIdx] = useState(STEPS.length - 1)
+  const [isRunning, setIsRunning] = useState(false)
+  const [apiResult, setApiResult] = useState(null)
+  const [apiError, setApiError] = useState(null)
+  const [debugLines, setDebugLines] = useState([{ cls: 'dl-sys', text: 'System initialized. Awaiting parameters.' }])
   const [showSpeedup, setShowSpeedup] = useState(false)
   const [showResults, setShowResults] = useState(false)
   const [chartsVisible, setChartsVisible] = useState(false)
@@ -280,6 +293,9 @@ export default function App() {
   const liveRows = apiResult
     ? (apiResult.gpu?.results?.length > 0 ? apiResult.gpu.results : apiResult.cpu?.results ?? [])
     : []
+  const summaryText = apiResult
+    ? (apiResult.gpu?.results?.length > 0 ? apiResult.gpu.summary : apiResult.cpu?.summary) || ''
+    : ''
 
   return (
     <div className="app-shell">
@@ -354,8 +370,8 @@ export default function App() {
               <div className="columns-pill-group">
                 {datasetInfo
                   ? datasetInfo.columns.map(c => (
-                      <span key={c.name} className="col-pill" title={`${c.dtype} — ${c.description}`}>{c.name}</span>
-                    ))
+                    <span key={c.name} className="col-pill" title={`${c.dtype} — ${c.description}`}>{c.name}</span>
+                  ))
                   : <span className="col-pill col-pill-loading">{datasetInfoError ? 'Unavailable' : 'Loading…'}</span>}
               </div>
             </div>
@@ -500,6 +516,7 @@ export default function App() {
                     {liveRows.length > 0 ? `${liveRows.length} records` : '—'}
                   </span>
                 </div>
+                <SummaryCard text={summaryText} />
                 <ResultsTable rows={liveRows} />
               </div>
             </div>

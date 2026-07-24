@@ -8,6 +8,7 @@ from app.services.llm_engine import synthesize_code, synthesize_cpu_code, MODEL_
 from app.services.modal_sandbox import execute_on_gpu, execute_on_cpu, confidence_from_attempts
 from app.services.query_validator import validate_query
 from app.services.risk_ranking import enrich_results
+from app.services.insight_summary import generate_summary
 from app.data.bigquery import get_dataset_info
 
 router = APIRouter()
@@ -50,6 +51,7 @@ class BenchmarkResult(BaseModel):
     status: str = "success"
     attempts_used: int = 1
     confidence: str = "high"  # "high" | "medium" | "low" — derived from attempts_used
+    summary: str = ""  # one-line plain-language summary of `results`
 
 class BenchmarkResponse(BaseModel):
     gpu_code: str
@@ -176,6 +178,7 @@ def benchmark(request: SynthesizeRequest):
                 status="success",
                 attempts_used=gpu_attempts,
                 confidence=confidence_from_attempts(gpu_attempts),
+                summary=generate_summary(gpu_results, request.task_type),
             ),
             cpu=BenchmarkResult(
                 execution_time_sec=cpu_res["execution_time_sec"],
@@ -185,6 +188,7 @@ def benchmark(request: SynthesizeRequest):
                 status="success",
                 attempts_used=cpu_attempts,
                 confidence=confidence_from_attempts(cpu_attempts),
+                summary=generate_summary(cpu_results, request.task_type),
             ),
             total_wall_time_sec=round(total_wall, 3),
         )

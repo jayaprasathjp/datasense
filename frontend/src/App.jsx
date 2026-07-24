@@ -232,7 +232,20 @@ export default function App() {
     setStepIdx(0)
 
     try {
-      const data = await runBenchmark(query, taskType)
+      const res = await fetch('/api/benchmark', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: inquiry.query, task_type: inquiry.task_type }),
+      })
+      if (!res.ok) {
+        let errMsg = `HTTP ${res.status}`
+        try {
+          const err = await res.json()
+          errMsg = err.detail || errMsg
+        } catch { /* response body wasn't JSON */ }
+        throw new Error(errMsg)
+      }
+      const data = await res.json()
 
       stepTimers.forEach(clearTimeout)
       setStepIdx(4)

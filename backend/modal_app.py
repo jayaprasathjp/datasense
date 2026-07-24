@@ -1,101 +1,73 @@
 import modal
 from pydantic import BaseModel
 
-app = modal.App("datasense-llm")
+app = modal.App("datasense")
 
-# We build a Debian image with Python 3.10, install git, and pip install the required ML packages.
-# We then specifically install unsloth from its github repo to ensure compatibility.
-image = (
+VLLM_IMAGE = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("git", "build-essential")
-    .pip_install(
-        "torch==2.3.0",
-        "transformers",
-        "accelerate",
-        "bitsandbytes",
-        "peft",
-        "scipy",
-        "fastapi[standard]",
-        "hf_transfer"
-    )
-    .pip_install("unsloth")
-    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
+    .pip_install("vllm>=0.23.0", "transformers", "huggingface_hub")
+    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1", "VLLM_USE_FLASHINFER_SAMPLER": "0"})
 )
 
 def download_models():
-    """Downloads the base model and LoRA weights during the image build step so they are cached in the container."""
-    from unsloth import FastLanguageModel
-    
-    BASE_MODEL = "unsloth/gemma-4-E2B-it"
-    LORA_ADAPTER = "sanjaymalladi/DataSense-Modal-E2B-SFT"
-    
-    print("Downloading models into the Docker image...")
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=BASE_MODEL,
-        max_seq_length=4096,
-        dtype=None,
-        load_in_4bit=True,
-    )
-    model.load_adapter(LORA_ADAPTER)
-    print("Download complete!")
+    from huggingface_hub import snapshot_download
+    snapshot_download("unsloth/gemma-4-E2B-it")
+    snapshot_download("sanjaymalladi/DataSense-Modal-E2B-SFT")
+    snapshot_download("google/gemma-4-E2B-it-assistant")
 
-image = image.run_function(download_models)
+VLLM_IMAGE = VLLM_IMAGE.run_function(download_models)
 
-class RequestBody(BaseModel):
-    system_prompt: str
-    user_prompt: str
+class ChatRequest(BaseModel):
+    messages: list[dict]
+    max_new_tokens: int = 512
+    temperature: float = 0.2
 
-# Use a T4 GPU and set a timeout of 10 minutes (to allow the model to download/load on cold boot)
-@app.cls(image=image, gpu="T4", timeout=600)
+@app.cls(image=VLLM_IMAGE, gpu="L4", timeout=600, scaledown_window=300, secrets=[modal.Secret.from_name("datasense-secret"), modal.Secret.from_name("huggingface")])
 class DataSenseModel:
     @modal.enter()
     def load_model(self):
-        """This runs once when the container boots, storing the model in GPU memory."""
-        from unsloth import FastLanguageModel
-        
-        BASE_MODEL = "unsloth/gemma-4-E2B-it"
-        LORA_ADAPTER = "sanjaymalladi/DataSense-Modal-E2B-SFT"
-        MAX_SEQ_LEN = 4096
+        from vllm import LLM
+        from vllm.lora.request import LoRARequest
 
-        print(f"Loading Base Model ({BASE_MODEL}) in 4-bit...")
-        self.model, self.tokenizer = FastLanguageModel.from_pretrained(
-            model_name=BASE_MODEL,
-            max_seq_length=MAX_SEQ_LEN,
-            dtype=None,
-            load_in_4bit=True,
+        self.llm = LLM(
+            model="unsloth/gemma-4-E2B-it",
+            max_model_len=4096,
+            enable_lora=True,
+            max_lora_rank=64,
+            enable_prefix_caching=True,
+            enforce_eager=True,
+            gpu_memory_utilization=0.85,
+            dtype="float16",
+            speculative_config={
+                "model": "google/gemma-4-E2B-it-assistant",
+                "num_speculative_tokens": 1,
+                "method": "mtp",
+            },
         )
-        
-        print(f"Attaching LoRA Adapter ({LORA_ADAPTER})...")
-        self.model.load_adapter(LORA_ADAPTER)
-        
-        # Prepare for extremely fast inference
-        FastLanguageModel.for_inference(self.model)
-        print("Model is ready for inference!")
+        self.lora_req = LoRARequest("datasense_adapter", 1, "sanjaymalladi/DataSense-Modal-E2B-SFT")
+        self.tokenizer = self.llm.get_tokenizer()
 
     @modal.fastapi_endpoint(method="POST")
-    def generate(self, req: RequestBody):
-        """This exposes a POST endpoint that takes the prompts and returns the LLM response."""
-        messages = [
-            {"role": "system", "content": req.system_prompt},
-            {"role": "user", "content": req.user_prompt},
-        ]
-        
-        # Format the chat template exactly as Gemma expects
-        inputs = self.tokenizer.apply_chat_template(
-            messages, tokenize=True, add_generation_prompt=True, return_tensors="pt"
-        ).to(self.model.device)
+    def generate(self, req: ChatRequest):
+        from vllm import SamplingParams
 
-        # Generate tokens
-        out = self.model.generate(
-            input_ids=inputs,
-            max_new_tokens=512,
-            temperature=0.2,
-            do_sample=True,
-            pad_token_id=self.tokenizer.eos_token_id,
+        prompt = self.tokenizer.apply_chat_template(
+            req.messages, tokenize=False, add_generation_prompt=True
         )
-        
-        # Decode only the newly generated tokens
-        new_tokens = out[0][inputs.shape[1]:]
-        text = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
-        
-        return {"result": text}
+        sp = SamplingParams(
+            temperature=max(req.temperature, 1e-5),
+            max_tokens=req.max_new_tokens,
+        )
+        outputs = self.llm.generate(
+            [prompt], sp, lora_request=self.lora_req, use_tqdm=False
+        )
+        result = outputs[0].outputs[0].text
+
+        return {
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": result},
+                "finish_reason": "stop",
+            }]
+        }

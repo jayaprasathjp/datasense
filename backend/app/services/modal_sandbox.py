@@ -9,7 +9,7 @@ import modal
 from modal.exception import AuthError
 
 from app.core.config import settings
-from app.data.bigquery import PARQUET_FILE_PATH
+from app.data.bigquery import get_parquet_path
 from app.services.llm_engine import fix_code
 
 logger = logging.getLogger(__name__)
@@ -135,7 +135,7 @@ except Exception as _ser_exc:
 """
 
 
-def execute_in_modal(user_code: str, mode: str = "gpu") -> dict:
+def execute_in_modal(user_code: str, mode: str = "gpu", dataset_scale: int = 1_200_000) -> dict:
     """
     Executes LLM-generated code inside a Modal Sandbox.
 
@@ -181,12 +181,13 @@ def execute_in_modal(user_code: str, mode: str = "gpu") -> dict:
             logs.append(f"Sandbox created: {sb.object_id}")
 
             # Upload parquet data into the sandbox at runtime
-            if os.path.exists(PARQUET_FILE_PATH):
-                sb.filesystem.copy_from_local(PARQUET_FILE_PATH, "/tmp/data.parquet")
-                logs.append("Dataset uploaded to sandbox.")
+            parquet_file_path = get_parquet_path(dataset_scale)
+            if os.path.exists(parquet_file_path):
+                sb.filesystem.copy_from_local(parquet_file_path, "/tmp/data.parquet")
+                logs.append(f"Dataset (scale: {dataset_scale:,} rows) uploaded to sandbox.")
             else:
                 raise FileNotFoundError(
-                    f"Parquet file not found at {PARQUET_FILE_PATH}. "
+                    f"Parquet file not found at {parquet_file_path}. "
                     "Did fetch_ecommerce_data() run successfully?"
                 )
 
@@ -299,21 +300,36 @@ def execute_in_modal(user_code: str, mode: str = "gpu") -> dict:
         "warmup_time_sec": warmup_time if warmup_time is not None else 0.0,
         "results": final_results if isinstance(final_results, list) else [final_results],
         "logs": logs,
+        "attempts_used": attempt,
+        "successful_code": current_code,
     }
+
+
+def confidence_from_attempts(attempts: int) -> str:
+    """
+    Reliability tier for a result, derived from how many attempts it took.
+    Scales with MAX_RETRIES rather than hardcoding attempt counts, so this
+    stays correct if the retry budget changes.
+    """
+    if attempts <= 1:
+        return "high"
+    if attempts >= MAX_RETRIES:
+        return "low"
+    return "medium"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Convenience wrappers (match the old e2b_sandbox.py interface exactly)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def execute_on_gpu(user_code: str) -> dict:
+def execute_on_gpu(user_code: str, dataset_scale: int = 1_200_000) -> dict:
     """Run user_code on a Modal GPU (T4) sandbox using cuDF."""
-    return execute_in_modal(user_code, mode="gpu")
+    return execute_in_modal(user_code, mode="gpu", dataset_scale=dataset_scale)
 
 
-def execute_on_cpu(user_code: str) -> dict:
+def execute_on_cpu(user_code: str, dataset_scale: int = 1_200_000) -> dict:
     """Run user_code on a Modal CPU sandbox using pandas."""
-    return execute_in_modal(user_code, mode="cpu")
+    return execute_in_modal(user_code, mode="cpu", dataset_scale=dataset_scale)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -321,7 +337,7 @@ def execute_on_cpu(user_code: str) -> dict:
 # Used by /api/benchmark to overlap sandbox startup with LLM inference time.
 # ─────────────────────────────────────────────────────────────────────────────
 
-def prewarm_sandbox(mode: str) -> modal.Sandbox:
+def prewarm_sandbox(mode: str, dataset_scale: int = 1_200_000) -> modal.Sandbox:
     """
     Creates a Modal Sandbox and uploads the parquet dataset into it.
     The sandbox stays alive via 'sleep infinity' until terminate() is called.
@@ -346,14 +362,15 @@ def prewarm_sandbox(mode: str) -> modal.Sandbox:
     # By passing NO positional arguments, the sandbox stays alive waiting for .exec()
     sb = modal.Sandbox.create(**create_kwargs)
 
-    if not os.path.exists(PARQUET_FILE_PATH):
+    parquet_file_path = get_parquet_path(dataset_scale)
+    if not os.path.exists(parquet_file_path):
         sb.terminate()
         raise FileNotFoundError(
-            f"Parquet file not found at {PARQUET_FILE_PATH}. "
+            f"Parquet file not found at {parquet_file_path}. "
             "Did fetch_ecommerce_data() run at startup?"
         )
 
-    sb.filesystem.copy_from_local(PARQUET_FILE_PATH, "/tmp/data.parquet")
+    sb.filesystem.copy_from_local(parquet_file_path, "/tmp/data.parquet")
     logger.info(f"[{mode.upper()}] sandbox pre-warmed and data uploaded.")
     return sb
 
@@ -442,4 +459,6 @@ def execute_on_prewarmed_sandbox(sb: modal.Sandbox, user_code: str, mode: str) -
         "warmup_time_sec": warmup_time if warmup_time is not None else 0.0,
         "results": final_results if isinstance(final_results, list) else [final_results],
         "logs": logs,
+        "attempts_used": attempt,
+        "successful_code": current_code,
     }

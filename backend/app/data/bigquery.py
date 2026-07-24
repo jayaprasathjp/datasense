@@ -13,6 +13,7 @@ N_STORES, N_PRODUCTS, N_USERS, N_REGIONS = 250, 2000, 50_000, 8
 
 # Global DataFrame
 global_df: pd.DataFrame | None = None
+_current_source: str = ""
 
 # Parquet path — one level above this file's directory (i.e. backend/app/data.parquet)
 PARQUET_FILE_PATH = os.path.join(
@@ -156,12 +157,44 @@ def load_bigquery_or_synthetic(n_rows: int) -> pd.DataFrame:
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _build_schema(df: pd.DataFrame) -> str:
+    """Build a schema description string from a DataFrame."""
+    lines = [f"Columns available in `df` ({len(df):,} rows, {len(df.columns)} cols):"]
+    for col in df.columns:
+        dtype = df[col].dtype
+        samples = df[col].dropna().iloc[:3].tolist()
+        sample_str = ", ".join(repr(s) if isinstance(s, str) else str(s) for s in samples)
+        lines.append(f"  - {col}: {dtype}  (e.g. {sample_str})")
+    return "\n".join(lines)
+
+
+def _set_dataframe(df: pd.DataFrame, source: str = "synthetic") -> None:
+    """Replace the global DataFrame (used by CSV upload or dataset loading)."""
+    global global_df, DATASET_SCHEMA, _current_source
+    global_df = df
+    _current_source = source
+    DATASET_SCHEMA = _build_schema(df)
+    logger.info(f"DataFrame replaced: {len(df):,} rows × {len(df.columns)} cols (source: {source})")
+
+
+def load_external_dataset(dataset_key: str) -> pd.DataFrame:
+    """Download and load a dataset from the registry, replacing global_df."""
+    from app.data.datasets import load_dataset as _dl
+    df = _dl(dataset_key)
+    _set_dataframe(df, source=dataset_key)
+
+    df.to_parquet(PARQUET_FILE_PATH, engine="pyarrow")
+    logger.info(f"Parquet updated at {PARQUET_FILE_PATH}")
+
+    return df
+
+
 def fetch_ecommerce_data() -> None:
     """
     Loads data (BigQuery or synthetic fallback) into global_df and writes
     a Parquet file at PARQUET_FILE_PATH for Modal Sandbox upload.
     """
-    global global_df
+    global global_df, DATASET_SCHEMA, _current_source
 
     if global_df is not None:
         logger.info("Data already loaded.")
@@ -169,6 +202,8 @@ def fetch_ecommerce_data() -> None:
 
     logger.info(f"Loading {N_ROWS:,}-row dataset (BigQuery or synthetic fallback)...")
     global_df = load_bigquery_or_synthetic(N_ROWS)
+    _current_source = "thelook_ecommerce" if "user_id" in global_df.columns else "synthetic"
+    DATASET_SCHEMA = _build_schema(global_df)
     logger.info(f"Dataset ready: {global_df.shape[0]:,} rows × {global_df.shape[1]} cols")
 
     logger.info(f"Writing Parquet to {PARQUET_FILE_PATH} for Modal Sandbox transfer...")
@@ -184,26 +219,9 @@ def get_dataframe() -> pd.DataFrame:
     return global_df
 
 
-# Schema description for LLM prompts
-DATASET_SCHEMA = """
-Columns available in `df`:
-  - store_id: int32         (0–249)
-  - product_id: int32       (0–1999)
-  - date: datetime64        (2024-01-01 to 2024-12-31)
-  - region: int8            (0–7)
-  - qty: int16              (1–9, units sold)
-  - price: float64          (unit price in USD)
-  - discount_pct: float64   (0.0–0.35)
-  - return_flag: int8       (1 = returned, 0 = kept)
-  - support_tier: int8      (1–4)
-  - sentiment: float64      (customer sentiment score, ~N(0,1))
-  - ticket_age_hours: float64
-  - days_since_restock: int16
-  - feat_1 … feat_4: float64 (numeric features)
-  - revenue: float64        (qty × price × (1 − discount_pct))
-  - margin: float64
-  - risk_score: float64     (0–1, composite risk)
-  - risk_label: int8        (1 = high risk, top 25%)
-  - target_flag: int8       (alias for risk_label)
-  - target_value: float64   (alias for risk_score)
-""".strip()
+def get_current_source() -> str:
+    """Returns the name of the currently loaded dataset source."""
+    return _current_source
+
+
+DATASET_SCHEMA = "No dataset loaded yet."

@@ -1,4 +1,5 @@
 import modal
+import json
 from pydantic import BaseModel
 
 app = modal.App("datasense")
@@ -22,6 +23,7 @@ class ChatRequest(BaseModel):
     messages: list[dict]
     max_new_tokens: int = 512
     temperature: float = 0.2
+    stream: bool = False
 
 @app.cls(image=VLLM_IMAGE, gpu="L4", timeout=600, scaledown_window=300, secrets=[modal.Secret.from_name("datasense-secret"), modal.Secret.from_name("huggingface")])
 class DataSenseModel:
@@ -51,6 +53,7 @@ class DataSenseModel:
     @modal.fastapi_endpoint(method="POST")
     def generate(self, req: ChatRequest):
         from vllm import SamplingParams
+        from fastapi.responses import StreamingResponse
 
         prompt = self.tokenizer.apply_chat_template(
             req.messages, tokenize=False, add_generation_prompt=True
@@ -59,15 +62,23 @@ class DataSenseModel:
             temperature=max(req.temperature, 1e-5),
             max_tokens=req.max_new_tokens,
         )
-        outputs = self.llm.generate(
-            [prompt], sp, lora_request=self.lora_req, use_tqdm=False
-        )
-        result = outputs[0].outputs[0].text
 
-        return {
-            "choices": [{
-                "index": 0,
-                "message": {"role": "assistant", "content": result},
-                "finish_reason": "stop",
-            }]
-        }
+        if req.stream:
+            def event_stream():
+                for output in self.llm.generate([prompt], sp, lora_request=self.lora_req, use_tqdm=False, stream=True):
+                    if output.outputs[0].text:
+                        yield f"data: {json.dumps({'token': output.outputs[0].text})}\n\n"
+                yield f"data: {json.dumps({'done': True})}\n\n"
+            return StreamingResponse(event_stream(), media_type="text/event-stream")
+        else:
+            outputs = self.llm.generate(
+                [prompt], sp, lora_request=self.lora_req, use_tqdm=False
+            )
+            result = outputs[0].outputs[0].text
+            return {
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": result},
+                    "finish_reason": "stop",
+                }]
+            }

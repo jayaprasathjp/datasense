@@ -1,123 +1,167 @@
+import asyncio
 import time
 import json
 import os
-import sys
-import threading
-from concurrent.futures import ThreadPoolExecutor
-from fastapi import APIRouter, HTTPException
+import io
+import pandas as pd
+import numpy as np
+from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
-from app.services.llm_engine import synthesize_code, synthesize_cpu_code
+
+from app.services.llm_engine import synthesize_code, synthesize_cpu_code, _call_modal_stream, _extract_code, _generate_summary
+from app.services.llm_engine import SYSTEM_PROMPT_CUDF, SYSTEM_PROMPT_PANDAS
 from app.services.modal_sandbox import execute_on_gpu, execute_on_cpu
-from app.data.bigquery import PARQUET_FILE_PATH
+from app.data.bigquery import PARQUET_FILE_PATH, get_dataframe, get_current_source, load_external_dataset, DATASET_SCHEMA
+from app.data.datasets import list_datasets
 
 router = APIRouter()
 
-class SynthesizeRequest(BaseModel):
+# ── Request / Response models ────────────────────────────────────────────────
+
+class AnalyzeRequest(BaseModel):
     query: str
     task_type: str = "data_analysis"
+    platform: Optional[str] = None  # "auto" (default), "cpu", "gpu"
 
-class SynthesizeResponse(BaseModel):
-    cpu_code: str
-    gpu_code: str
-
-class ExecuteRequest(BaseModel):
+class AnalyzeResponse(BaseModel):
     code: str
-
-class ExecuteResponse(BaseModel):
-    execution_time_sec: float
-    warmup_time_sec: float = 0.0  # library/CUDA init cost, excluded from benchmark
-    results: Optional[List[Dict[str, Any]]] = None
-    logs: List[str] = []
-    status: str = "success"
-class BenchmarkResult(BaseModel):
+    platform: str
     execution_time_sec: float
     warmup_time_sec: float = 0.0
     results: Optional[List[Dict[str, Any]]] = None
     logs: List[str] = []
     status: str = "success"
 
-class BenchmarkResponse(BaseModel):
-    gpu_code: str
-    cpu_code: str
-    gpu: BenchmarkResult
-    cpu: BenchmarkResult
-    total_wall_time_sec: float
+class DatasetInfoResponse(BaseModel):
+    row_count: int
+    column_count: int
+    columns: List[Dict[str, str]]
+    preview: List[Dict[str, Any]]
+    source: str = "synthetic"
 
+class UploadResponse(BaseModel):
+    row_count: int
+    column_count: int
+    columns: List[str]
+    message: str
 
-@router.post("/api/synthesize")
-def synthesize(request: SynthesizeRequest):
+class DatasetLoadRequest(BaseModel):
+    key: str
+
+class DatasetLoadResponse(BaseModel):
+    row_count: int
+    column_count: int
+    message: str
+
+# ── Platform detection ───────────────────────────────────────────────────────
+
+GPU_KEYWORDS = [
+    "classif", "predict", "train", "model", "fit",
+    "ml", "machine learning", "risk", "gpu",
+]
+
+def _detect_platform(query: str) -> str:
+    q = query.lower()
+    for kw in GPU_KEYWORDS:
+        if kw in q:
+            return "gpu"
+    return "cpu"
+
+# ── Dataset endpoints ────────────────────────────────────────────────────────
+
+@router.get("/api/dataset/info", response_model=DatasetInfoResponse)
+def dataset_info():
     try:
-        gpu_code = synthesize_code(request.query, request.task_type)
-        cpu_code = synthesize_cpu_code(request.query, request.task_type)
-        return SynthesizeResponse(cpu_code=cpu_code, gpu_code=gpu_code)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        df = get_dataframe()
+    except ValueError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
-@router.post("/api/execute-cpu", response_model=ExecuteResponse)
-def execute_cpu(request: ExecuteRequest):
-    """Execute pandas code on CPU inside a Modal CPU Sandbox for fair benchmarking."""
+    preview = df.head(10)
+    def safe_val(v):
+        if isinstance(v, (pd.Timestamp, pd.Period)):
+            return str(v)
+        if isinstance(v, (np.integer,)):
+            return int(v)
+        if isinstance(v, (np.floating,)):
+            return float(v)
+        if pd.isna(v):
+            return None
+        return v
+
+    preview_rows = [
+        {col: safe_val(row[col]) for col in df.columns}
+        for row in preview.to_dict("records")
+    ]
+
+    columns = [{"name": col, "dtype": str(df[col].dtype)} for col in df.columns]
+
+    source = get_current_source()
+
+    return DatasetInfoResponse(
+        row_count=len(df),
+        column_count=len(df.columns),
+        columns=columns,
+        preview=preview_rows,
+        source=source,
+    )
+
+
+@router.get("/api/datasets")
+def list_available_datasets():
+    return list_datasets()
+
+
+@router.post("/api/dataset/load", response_model=DatasetLoadResponse)
+def load_dataset(request: DatasetLoadRequest):
     try:
-        response_data = execute_on_cpu(request.code)
-        return ExecuteResponse(
-            execution_time_sec=response_data["execution_time_sec"],
-            warmup_time_sec=response_data["warmup_time_sec"],
-            results=response_data["results"],
-            logs=response_data["logs"],
-            status="success"
+        df = load_external_dataset(request.key)
+        return DatasetLoadResponse(
+            row_count=len(df),
+            column_count=len(df.columns),
+            message=f"Loaded {len(df):,} rows with {len(df.columns)} columns.",
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/api/execute-gpu", response_model=ExecuteResponse)
-def execute_gpu(request: ExecuteRequest):
-    """Execute cuDF code on GPU (T4) inside a Modal GPU Sandbox for fair benchmarking."""
+
+@router.post("/api/dataset/upload", response_model=UploadResponse)
+async def upload_dataset(file: UploadFile = File(...)):
+    if not file.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Only CSV files are supported.")
+
     try:
-        response_data = execute_on_gpu(request.code)
-        return ExecuteResponse(
-            execution_time_sec=response_data["execution_time_sec"],
-            warmup_time_sec=response_data["warmup_time_sec"],
-            results=response_data["results"],
-            logs=response_data["logs"],
-            status="success"
-        )
+        content = await file.read()
+        df = pd.read_csv(io.BytesIO(content))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {e}")
 
+    from app.data.bigquery import _set_dataframe
+    _set_dataframe(df)
 
-# ── Local execution fallback (when Modal sandboxes are unavailable) ──────────
+    return UploadResponse(
+        row_count=len(df),
+        column_count=len(df.columns),
+        columns=list(df.columns),
+        message=f"Loaded {len(df):,} rows with {len(df.columns)} columns.",
+    )
+
+# ── Analyze endpoint (auto-select platform) ──────────────────────────────────
 
 def _execute_locally(code: str, mode: str) -> dict:
-    """
-    Runs LLM-generated code locally using pandas (or attempts cuDF if available).
-    This avoids the need for Modal sandboxes during development / demo.
-    """
-    import pandas as pd
-    import numpy as np
-
     logs = [f"Mode: {mode.upper()} (local fallback)"]
     logs.append("Attempting local execution...")
 
     if not os.path.exists(PARQUET_FILE_PATH):
-        return {"execution_time_sec": 0.0, "warmup_time_sec": 0.0, "results": [], "logs": logs + [f"Parquet not found at {PARQUET_FILE_PATH}"]}
+        return {"execution_time_sec": 0.0, "warmup_time_sec": 0.0, "results": [], "logs": logs + ["Parquet not found."]}
 
     try:
         df = pd.read_parquet(PARQUET_FILE_PATH)
         logs.append(f"Data loaded: {len(df)} rows")
 
-        # If GPU mode but cuDF not available, still run with pandas
-        use_cudf = False
-        if mode == "gpu":
-            try:
-                import cudf
-                df = cudf.from_pandas(df)
-                use_cudf = True
-                logs.append("Using cuDF (GPU) backend locally")
-            except ImportError:
-                logs.append("cuDF not available locally — falling back to pandas for GPU code")
-
         warmup_t0 = time.perf_counter()
-        time.sleep(0.01)  # minimal warmup
+        time.sleep(0.01)
         warmup_time = time.perf_counter() - warmup_t0
 
         result = None
@@ -132,7 +176,6 @@ def _execute_locally(code: str, mode: str) -> dict:
         exec_time = time.perf_counter() - exec_t0
         logs.append(f"Execution completed in {exec_time:.3f}s")
 
-        # Serialise result
         if result is None:
             results = []
         elif hasattr(result, "to_pandas"):
@@ -158,37 +201,19 @@ def _execute_locally(code: str, mode: str) -> dict:
         return {"execution_time_sec": 0.0, "warmup_time_sec": 0.0, "results": [], "logs": logs}
 
 
-# ── Mock benchmark results (when everything is unavailable) ──────────────────
-
-MOCK_BENCHMARK = {
-    "cpu": {"execution_time_sec": 81.04, "warmup_time_sec": 0.5, "results": [], "logs": ["Mode: CPU (pandas) [mock]", "Using pre-computed benchmark data from 181K-row sweep."]},
-    "gpu": {"execution_time_sec": 0.38, "warmup_time_sec": 2.1, "results": [], "logs": ["Mode: GPU (cuDF) [mock]", "Using pre-computed benchmark data from 181K-row sweep."]},
-}
-
 MOCK_RESULTS = {
     "predict risk_label": [
         {"risk_label": 1, "pred_risk": 0.97, "store_id": "S042", "region": "APAC", "revenue": 8920.0},
         {"risk_label": 1, "pred_risk": 0.94, "store_id": "S107", "region": "EMEA", "revenue": 12450.0},
-        {"risk_label": 1, "pred_risk": 0.91, "store_id": "S089", "region": "AMER", "revenue": 6710.0},
-        {"risk_label": 1, "pred_risk": 0.88, "store_id": "S023", "region": "APAC", "revenue": 15320.0},
-        {"risk_label": 0, "pred_risk": 0.85, "store_id": "S156", "region": "EMEA", "revenue": 3400.0},
     ],
     "rolling": [
         {"store_id": "S042", "date": "2024-11-15", "revenue": 3200.0, "revenue_7d_avg": 5100.0, "revenue_pct_diff": -0.37},
-        {"store_id": "S107", "date": "2024-11-15", "revenue": 2800.0, "revenue_7d_avg": 4200.0, "revenue_pct_diff": -0.33},
-        {"store_id": "S089", "date": "2024-11-15", "revenue": 4100.0, "revenue_7d_avg": 5800.0, "revenue_pct_diff": -0.29},
     ],
     "priority": [
-        {"store_id": "S042", "region": "APAC", "priority_score": 0.82, "return_flag": 1, "ticket_age_hours": 72, "margin": 0.12},
-        {"store_id": "S107", "region": "EMEA", "priority_score": 0.79, "return_flag": 1, "ticket_age_hours": 48, "margin": -0.05},
-        {"store_id": "S089", "region": "AMER", "priority_score": 0.74, "return_flag": 0, "ticket_age_hours": 96, "margin": 0.08},
+        {"store_id": "S042", "priority_score": 0.82, "return_flag": 1, "ticket_age_hours": 72},
     ],
     "dashboard": [
-        {"region": "APAC", "support_tier": "premium", "total_revenue": 245000, "avg_margin": 0.18, "return_rate": 0.12, "avg_ticket_age": 36.5, "avg_sentiment": 0.65},
-        {"region": "APAC", "support_tier": "standard", "total_revenue": 182000, "avg_margin": 0.21, "return_rate": 0.09, "avg_ticket_age": 28.3, "avg_sentiment": 0.72},
-        {"region": "EMEA", "support_tier": "premium", "total_revenue": 198000, "avg_margin": 0.15, "return_rate": 0.14, "avg_ticket_age": 42.1, "avg_sentiment": 0.58},
-        {"region": "EMEA", "support_tier": "standard", "total_revenue": 156000, "avg_margin": 0.19, "return_rate": 0.11, "avg_ticket_age": 31.7, "avg_sentiment": 0.69},
-        {"region": "AMER", "support_tier": "premium", "total_revenue": 312000, "avg_margin": 0.22, "return_rate": 0.08, "avg_ticket_age": 25.9, "avg_sentiment": 0.78},
+        {"region": "APAC", "support_tier": "premium", "total_revenue": 245000, "avg_margin": 0.18},
     ],
 }
 
@@ -205,99 +230,187 @@ def _get_mock_results(query: str) -> list:
     return []
 
 
-@router.post("/api/benchmark")
-def benchmark(request: SynthesizeRequest):
-    """
-    All-in-one benchmark endpoint.
-
-    Runs two full pipelines CONCURRENTLY in background threads:
-      Thread A: GPU  → synthesize cuDF code  → create GPU sandbox → execute
-      Thread B: CPU  → synthesize pandas code → create CPU sandbox → execute
-
-    Fallback chain: Modal Sandbox → local execution → mock pre-computed data.
-    """
-    t_start = time.perf_counter()
-
-    def run_gpu():
-        try:
-            code = synthesize_code(request.query, request.task_type)
-            result = execute_on_gpu(code)
-            result["code"] = code
-            if result.get("results") is not None:
-                if result.get("results"):
-                    return result
-                # Empty but valid — keep sandbox results (don't fall through to mock)
-                return result
-            # Fallback: local execution
-            logger = __import__("logging").getLogger(__name__)
-            logger.info("Modal GPU unavailable — trying local execution fallback.")
-            local = _execute_locally(code, "gpu")
-            local["code"] = code
-            if local.get("results") is not None:
-                if local.get("results"):
-                    return local
-                return local
-            # Fallback: mock data
-            mock_rows = _get_mock_results(request.query)
-            return {"code": code, "execution_time_sec": MOCK_BENCHMARK["gpu"]["execution_time_sec"], "warmup_time_sec": MOCK_BENCHMARK["gpu"]["warmup_time_sec"], "results": mock_rows, "logs": MOCK_BENCHMARK["gpu"]["logs"]}
-        except Exception as e:
-            mock_rows = _get_mock_results(request.query)
-            return {"code": "", "execution_time_sec": MOCK_BENCHMARK["gpu"]["execution_time_sec"], "warmup_time_sec": MOCK_BENCHMARK["gpu"]["warmup_time_sec"], "results": mock_rows, "logs": MOCK_BENCHMARK["gpu"]["logs"] + [f"GPU error: {e}"]}
-
-    def run_cpu():
-        try:
-            code = synthesize_cpu_code(request.query, request.task_type)
-            result = execute_on_cpu(code)
-            result["code"] = code
-            if result.get("results") is not None:
-                if result.get("results"):
-                    return result
-                return result
-            # Fallback: local execution
-            logger = __import__("logging").getLogger(__name__)
-            logger.info("Modal CPU unavailable — trying local execution fallback.")
-            local = _execute_locally(code, "cpu")
-            local["code"] = code
-            if local.get("results") is not None:
-                if local.get("results"):
-                    return local
-                return local
-            # Fallback: mock data
-            mock_rows = _get_mock_results(request.query)
-            return {"code": code, "execution_time_sec": MOCK_BENCHMARK["cpu"]["execution_time_sec"], "warmup_time_sec": MOCK_BENCHMARK["cpu"]["warmup_time_sec"], "results": mock_rows, "logs": MOCK_BENCHMARK["cpu"]["logs"]}
-        except Exception as e:
-            mock_rows = _get_mock_results(request.query)
-            return {"code": "", "execution_time_sec": MOCK_BENCHMARK["cpu"]["execution_time_sec"], "warmup_time_sec": MOCK_BENCHMARK["cpu"]["warmup_time_sec"], "results": mock_rows, "logs": MOCK_BENCHMARK["cpu"]["logs"] + [f"CPU error: {e}"]}
+@router.post("/api/analyze", response_model=AnalyzeResponse)
+def analyze(request: AnalyzeRequest):
+    platform = (request.platform or "auto").lower()
+    if platform not in ("cpu", "gpu"):
+        platform = _detect_platform(request.query)
 
     try:
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            f_gpu = pool.submit(run_gpu)
-            f_cpu = pool.submit(run_cpu)
-            gpu_res = f_gpu.result()
-            cpu_res = f_cpu.result()
+        if platform == "gpu":
+            code = synthesize_code(request.query, request.task_type)
+            result = execute_on_gpu(code)
+        else:
+            code = synthesize_cpu_code(request.query, request.task_type)
+            result = execute_on_cpu(code)
 
-        total_wall = time.perf_counter() - t_start
+        result["code"] = code
+        result["platform"] = platform
 
-        return BenchmarkResponse(
-            gpu_code=gpu_res.get("code", ""),
-            cpu_code=cpu_res.get("code", ""),
-            gpu=BenchmarkResult(
-                execution_time_sec=gpu_res.get("execution_time_sec", 0.0),
-                warmup_time_sec=gpu_res.get("warmup_time_sec", 0.0),
-                results=gpu_res.get("results", []),
-                logs=gpu_res.get("logs", []),
-                status="success" if gpu_res.get("results") else "error",
-            ),
-            cpu=BenchmarkResult(
-                execution_time_sec=cpu_res.get("execution_time_sec", 0.0),
-                warmup_time_sec=cpu_res.get("warmup_time_sec", 0.0),
-                results=cpu_res.get("results", []),
-                logs=cpu_res.get("logs", []),
-                status="success" if cpu_res.get("results") else "error",
-            ),
-            total_wall_time_sec=round(total_wall, 3),
+        if result.get("results") is not None:
+            return AnalyzeResponse(
+                code=code,
+                platform=platform,
+                execution_time_sec=result.get("execution_time_sec", 0.0),
+                warmup_time_sec=result.get("warmup_time_sec", 0.0),
+                results=result.get("results", []),
+                logs=result.get("logs", []),
+                status="success",
+            )
+
+        logger = __import__("logging").getLogger(__name__)
+        logger.info(f"Modal {platform.upper()} unavailable — trying local execution fallback.")
+        local = _execute_locally(code, platform)
+        if local.get("results") is not None:
+            return AnalyzeResponse(
+                code=code,
+                platform=platform,
+                execution_time_sec=local.get("execution_time_sec", 0.0),
+                warmup_time_sec=local.get("warmup_time_sec", 0.0),
+                results=local.get("results", []),
+                logs=local.get("logs", []),
+                status="success",
+            )
+
+        mock_rows = _get_mock_results(request.query)
+        return AnalyzeResponse(
+            code=code,
+            platform=platform,
+            execution_time_sec=0.0,
+            warmup_time_sec=0.0,
+            results=mock_rows,
+            logs=[f"Fell back to pre-computed results for this query type."],
+            status="success",
         )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+# ── Streaming analyze endpoint ───────────────────────────────────────────────
+
+class _SafeEncoder(json.JSONEncoder):
+    def default(self, o):
+        return str(o)
+
+
+async def _sse_format(agen):
+    async for item in agen:
+        yield f"event: {item['event']}\ndata: {json.dumps(item['data'], cls=_SafeEncoder)}\n\n"
+
+
+@router.post("/api/analyze/stream")
+async def analyze_stream(request: AnalyzeRequest):
+    from app.services.agent import run_agent
+
+    async def event_generator():
+        yield {"event": "status", "data": {"phase": "routing", "message": "Starting agent..."}}
+        await asyncio.sleep(0)
+
+        answer_text = ""
+
+        try:
+            async for event in run_agent(request.query, max_steps=8):
+                ev = event["event"]
+                if ev == "agent_text":
+                    for ch in event["data"]["text"]:
+                        yield {"event": "token", "data": {"token": ch}}
+                        await asyncio.sleep(0)
+                elif ev == "code_ready":
+                    yield {"event": "code_ready", "data": {"code": event["data"]["code"], "step": event["data"]["step"]}}
+                    await asyncio.sleep(0)
+                elif ev == "exec_result":
+                    d = event["data"]
+                    yield {"event": "result", "data": {"results": d["result_rows"], "step": d["step"], "success": d["success"], "stdout": d["stdout"][:500], "stderr": d["stderr"][:500]}}
+                    await asyncio.sleep(0)
+                elif ev == "answer":
+                    answer_text = event["data"]["text"]
+                    yield {"event": "answer", "data": {"text": answer_text}}
+                    await asyncio.sleep(0)
+                elif ev == "summary":
+                    yield {"event": "summary", "data": {"text": event["data"]["text"]}}
+                    await asyncio.sleep(0)
+                elif ev == "status":
+                    yield {"event": "status", "data": event["data"]}
+                    await asyncio.sleep(0)
+                elif ev == "error":
+                    yield {"event": "error", "data": event["data"]}
+                    await asyncio.sleep(0)
+                elif ev == "done":
+                    yield {"event": "done", "data": {}}
+                    await asyncio.sleep(0)
+                    break
+        except Exception as e:
+            yield {"event": "error", "data": {"message": f"Agent error: {e}"}}
+            await asyncio.sleep(0)
+            yield {"event": "done", "data": {}}
+            await asyncio.sleep(0)
+
+    return StreamingResponse(
+        _sse_format(event_generator()),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ── Legacy endpoints (keep for backward compat) ──────────────────────────────
+
+class SynthesizeRequest(BaseModel):
+    query: str
+    task_type: str = "data_analysis"
+
+class SynthesizeResponse(BaseModel):
+    cpu_code: str
+    gpu_code: str
+
+class ExecuteRequest(BaseModel):
+    code: str
+
+class ExecuteResponse(BaseModel):
+    execution_time_sec: float
+    warmup_time_sec: float = 0.0
+    results: Optional[List[Dict[str, Any]]] = None
+    logs: List[str] = []
+    status: str = "success"
+
+
+@router.post("/api/synthesize")
+def synthesize(request: SynthesizeRequest):
+    try:
+        gpu_code = synthesize_code(request.query, request.task_type)
+        cpu_code = synthesize_cpu_code(request.query, request.task_type)
+        return SynthesizeResponse(cpu_code=cpu_code, gpu_code=gpu_code)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/api/execute-cpu", response_model=ExecuteResponse)
+def execute_cpu(request: ExecuteRequest):
+    try:
+        response_data = execute_on_cpu(request.code)
+        return ExecuteResponse(
+            execution_time_sec=response_data["execution_time_sec"],
+            warmup_time_sec=response_data["warmup_time_sec"],
+            results=response_data["results"],
+            logs=response_data["logs"],
+            status="success",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/api/execute-gpu", response_model=ExecuteResponse)
+def execute_gpu(request: ExecuteRequest):
+    try:
+        response_data = execute_on_gpu(request.code)
+        return ExecuteResponse(
+            execution_time_sec=response_data["execution_time_sec"],
+            warmup_time_sec=response_data["warmup_time_sec"],
+            results=response_data["results"],
+            logs=response_data["logs"],
+            status="success",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

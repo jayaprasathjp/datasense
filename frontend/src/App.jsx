@@ -1,76 +1,86 @@
 import { useEffect, useRef, useState } from 'react'
+import { analyzeQuery, analyzeQueryStream, getDatasetInfo, uploadDataset, getAvailableDatasets, loadDataset } from './api/client'
 import './index.css'
 
-const INQUIRIES = [
-  {
-    label: 'I. Risk Classification (RF)',
-    query: 'Train a classifier to predict risk_label from numeric columns (feat_1 to feat_4, price, qty, discount_pct, ticket_age_hours, sentiment, days_since_restock). Return the top 20 highest-risk rows with predicted probability as a new column called pred_risk.',
-    task_type: 'Risk scoring / classification',
-    resultsTitle: 'Risk Classification Output',
-  },
-  {
-    label: 'II. Time-Series Alerting',
-    query: "Compute a 7-day rolling average revenue per store. Flag the top 10 stores where today's revenue is more than 20% below the rolling average. Return a dataframe of those anomalies.",
-    task_type: 'Time-series alerting',
-    resultsTitle: 'Anomalous Revenue Deterioration',
-  },
-  {
-    label: 'III. Operational Triage',
-    query: 'Rank the top 25 rows by operational priority using return_flag, ticket_age_hours, days_since_restock, sentiment, and margin. Add a priority_score column and return the ranked dataframe.',
-    task_type: 'data_analysis',
-    resultsTitle: 'Operational Triage Matrix',
-  },
-  {
-    label: 'IV. Executive Summary',
-    query: 'Create an aggregated dashboard summary grouped by region and support_tier. Show total revenue, average margin, return rate, average ticket_age_hours, and average sentiment.',
-    task_type: 'data_analysis',
-    resultsTitle: 'Cross-Regional Performance Extract',
-  },
+const STATUS_WORDS = [
+  'Accomplishing', 'Actioning', 'Actualizing', 'Baking', 'Brewing',
+  'Calculating', 'Cerebrating', 'Churning', 'Clauding', 'Coalescing',
+  'Cogitating', 'Computing', 'Conjuring', 'Considering', 'Cooking',
+  'Crafting', 'Creating', 'Crunching', 'Deliberating', 'Determining',
+  'Doing', 'Effecting', 'Finagling', 'Forging', 'Forming',
+  'Generating', 'Hatching', 'Herding', 'Honking', 'Hustling',
+  'Ideating', 'Inferring', 'Manifesting', 'Marinating', 'Moseying',
+  'Mulling', 'Mustering', 'Musing', 'Noodling', 'Percolating',
+  'Pondering', 'Processing', 'Puttering', 'Reticulating', 'Ruminating',
+  'Schlepping', 'Shucking', 'Simmering', 'Smooshing', 'Spinning',
+  'Stewing', 'Synthesizing', 'Thinking', 'Transmuting', 'Vibing', 'Working',
 ]
 
-const STEPS = ['Acquisition', 'Synthesis (LLM)', 'CPU Baseline', 'GPU Acceleration', 'Resolution']
-const ROMAN = ['I', 'II', 'III', 'IV', 'V']
-
-// Kaggle sweep results (static reference data from notebook Section D)
-const SWEEP_DATA = [
-  { label: 'Time-series alerting', sub: 'rolling_window', val: 58.9, pct: 100, type: 'gpu' },
-  { label: 'Dashboard enrichment', sub: 'merge_join',     val: 39.8, pct: 67,  type: 'gpu' },
-  { label: 'Priority ranking',     sub: 'sort_values',    val: 21.1, pct: 36,  type: 'ink' },
-  { label: 'BI aggregation',       sub: 'groupby_agg',    val: 18.4, pct: 31,  type: 'ink' },
-  { label: 'Risk modeling (5M)',   sub: 'rf_classify_fit', val: 15.7, pct: 27, type: 'ink' },
-  { label: 'Forecasting',          sub: 'linreg_fit',     val: 11.7, pct: 20,  type: 'ink' },
-  { label: 'Segmentation (weak)',  sub: 'kmeans_fit',     val: 3.0,  pct: 5,   type: 'slow' },
-]
-
-function formatVal(val) {
-  if (val === null || val === undefined) return '—'
-  if (typeof val === 'number') return Number.isInteger(val) ? val.toLocaleString() : parseFloat(val.toFixed(4)).toString()
-  return String(val)
+function randomStatusWord() {
+  return STATUS_WORDS[Math.floor(Math.random() * STATUS_WORDS.length)]
 }
 
-function ResultsTable({ rows, title, count }) {
+const PRESETS = [
+  {
+    label: 'Revenue by Region',
+    query: 'Which region has the highest total revenue and what is the revenue difference between the best and worst performing region?',
+    task_type: 'data_analysis',
+  },
+  {
+    label: 'High-Value Customers',
+    query: 'Find the top 5 users by total spending. What percentage of total revenue do they represent?',
+    task_type: 'data_analysis',
+  },
+  {
+    label: 'Discount vs Revenue',
+    query: 'Do transactions with above-average discounts generate more or less revenue than those with below-average discounts? Compare the average revenue and margin between the two groups.',
+    task_type: 'data_analysis',
+  },
+  {
+    label: 'Risk Profile',
+    query: 'What percentage of transactions are flagged as high risk? Compare the average revenue and margin between high-risk and low-risk transactions.',
+    task_type: 'data_analysis',
+  },
+  {
+    label: 'Best Support Tier',
+    query: 'Which support tier has the lowest average risk score and highest average revenue? Rank all support tiers by a combined score of revenue minus risk.',
+    task_type: 'data_analysis',
+  },
+  {
+    label: 'Full Exploration',
+    query: 'Explore the dataset and provide a statistical summary of all numeric columns. Show the data types, missing value counts, and basic statistics (mean, median, min, max, std) for each numeric column.',
+    task_type: 'data_analysis',
+  },
+  {
+    label: 'Correlation Matrix',
+    query: 'Compute the correlation matrix for all numeric columns. Return the top 5 most correlated pairs with their correlation coefficients.',
+    task_type: 'data_analysis',
+  },
+]
+
+function formatVal(v) {
+  if (v === null || v === undefined) return '\u2014'
+  if (typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString() : parseFloat(v.toFixed(4)).toString()
+  return String(v)
+}
+
+function DataTable({ rows, dense }) {
   if (!rows || rows.length === 0) return (
-    <p style={{ fontFamily: 'var(--sans)', fontSize: '0.85rem', color: 'var(--ink-lighter)', fontStyle: 'italic' }}>
-      No tabular output returned for this query.
-    </p>
+    <p className="empty-state">No tabular output returned.</p>
   )
-  const columns = Object.keys(rows[0])
+  const cols = Object.keys(rows[0])
   return (
-    <div className="table-container">
-      <table>
+    <div className="table-scroll">
+      <table className={dense ? 'dense' : ''}>
         <thead>
           <tr>
-            {columns.map(col => (
-              <th key={col} className="n">{col.replace(/_/g, ' ')}</th>
-            ))}
+            {cols.map(c => <th key={c} className="n">{c.replace(/_/g, ' ')}</th>)}
           </tr>
         </thead>
         <tbody>
           {rows.slice(0, 25).map((row, i) => (
             <tr key={i}>
-              {columns.map(col => (
-                <td key={col} className="n">{formatVal(row[col])}</td>
-              ))}
+              {cols.map(c => <td key={c} className="n">{formatVal(row[c])}</td>)}
             </tr>
           ))}
         </tbody>
@@ -79,375 +89,420 @@ function ResultsTable({ rows, title, count }) {
   )
 }
 
+function PlatformBadge({ platform, timeSec, attempts }) {
+  const tone = platform === 'gpu' ? 'gpu' : 'cpu'
+  const label = platform === 'gpu' ? 'GPU' : 'CPU'
+  return (
+    <span className={`platform-badge ${tone}`}>
+      <span className="badge-dot" />
+      {label} {'\u00b7'} {timeSec.toFixed(3)}s
+      {attempts ? <span className="badge-attempts">{attempts}</span> : null}
+    </span>
+  )
+}
+
 export default function App() {
-  const [activeIdx, setActiveIdx]     = useState(0)
-  const [query, setQuery]             = useState(INQUIRIES[0].query)
-  const [stepIdx, setStepIdx]         = useState(STEPS.length - 1)
-  const [isRunning, setIsRunning]     = useState(false)
-  const [apiResult, setApiResult]     = useState(null)
-  const [apiError, setApiError]       = useState(null)
-  const [debugLines, setDebugLines]   = useState([{ cls: 'dl-sys', text: 'System initialized. Awaiting parameters.' }])
-  const [showSpeedup, setShowSpeedup] = useState(false)
-  const [showResults, setShowResults] = useState(false)
-  const [chartsVisible, setChartsVisible] = useState(false)
-  const debugRef = useRef(null)
-  const appendixRef = useRef(null)
+  const [datasetInfo, setDatasetInfo] = useState(null)
+  const [datasetError, setDatasetError] = useState(null)
+  const [activePreset, setActivePreset] = useState(0)
+  const [query, setQuery] = useState(PRESETS[0].query)
+  const [taskType, setTaskType] = useState(PRESETS[0].task_type)
+  const [isRunning, setIsRunning] = useState(false)
+  const [result, setResult] = useState(null)
+  const [error, setError] = useState(null)
+  const [codeCollapsed, setCodeCollapsed] = useState(true)
+  const [statusWord, setStatusWord] = useState('')
+  const [summary, setSummary] = useState('')
+  const [answer, setAnswer] = useState('')
+  const [streamPhase, setStreamPhase] = useState('')
+  const [currentStep, setCurrentStep] = useState(0)
+  const [maxSteps, setMaxSteps] = useState(0)
+  const [streamTokens, setStreamTokens] = useState('')
+  const [streamCode, setStreamCode] = useState('')
+  const [streamPlatform, setStreamPlatform] = useState('')
+  const [retryCount, setRetryCount] = useState(0)
+  const [selectedPlatform, setSelectedPlatform] = useState('auto')
+  const tokenBufRef = useRef('')
+  const tokenTimerRef = useRef(null)
+  const [uploading, setUploading] = useState(false)
+  const [availableDatasets, setAvailableDatasets] = useState([])
+  const [loadingDataset, setLoadingDataset] = useState(false)
+  const fileRef = useRef(null)
 
-  // Auto-scroll debug log
   useEffect(() => {
-    if (debugRef.current) debugRef.current.scrollTop = debugRef.current.scrollHeight
-  }, [debugLines])
-
-  // Animate appendix bars on scroll into view
-  useEffect(() => {
-    const obs = new IntersectionObserver(([e]) => { if (e.isIntersecting) setChartsVisible(true) }, { threshold: 0.3 })
-    if (appendixRef.current) obs.observe(appendixRef.current)
-    return () => obs.disconnect()
+    getDatasetInfo()
+      .then(setDatasetInfo)
+      .catch(err => setDatasetError(err.message))
+    getAvailableDatasets()
+      .then(setAvailableDatasets)
+      .catch(() => {})
   }, [])
 
-  const addLog = (cls, text) => setDebugLines(prev => [...prev, { cls, text }])
-
-  const selectInquiry = (idx) => {
-    setActiveIdx(idx)
-    setQuery(INQUIRIES[idx].query)
-    setApiResult(null)
-    setApiError(null)
-    setShowSpeedup(false)
-    setShowResults(false)
-    setStepIdx(STEPS.length - 1)
-    setDebugLines([{ cls: 'dl-sys', text: 'System initialized. Awaiting parameters.' }])
+  const switchDataset = async (key) => {
+    if (!key) return
+    setLoadingDataset(true)
+    setError(null)
+    try {
+      const res = await loadDataset(key)
+      const info = await getDatasetInfo()
+      setDatasetInfo(info)
+      setResult(null)
+    } catch (err) {
+      setError(`Failed to load dataset: ${err.message}`)
+    } finally {
+      setLoadingDataset(false)
+    }
   }
 
-  const runPipeline = async () => {
-    if (isRunning) return
-    const inquiry = INQUIRIES[activeIdx]
+  const selectPreset = (i) => {
+    setActivePreset(i)
+    setQuery(PRESETS[i].query)
+    setTaskType(PRESETS[i].task_type)
+    setResult(null)
+    setError(null)
+  }
+
+  const handleCustom = () => {
+    setActivePreset(-1)
+    setResult(null)
+    setError(null)
+  }
+
+  const handleUpload = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    setUploading(true)
+    try {
+      const res = await uploadDataset(file)
+      setDatasetInfo({ ...datasetInfo, row_count: res.row_count, columns: res.columns.map(c => ({ name: c, dtype: '' })) })
+      setError(null)
+    } catch (err) {
+      setError(`Upload failed: ${err.message}`)
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  const runAnalysis = async () => {
+    if (isRunning || !query.trim()) return
     setIsRunning(true)
-    setApiResult(null)
-    setApiError(null)
-    setShowSpeedup(false)
-    setShowResults(false)
-    setDebugLines([])
-
-    // Step through pipeline visually
-    const stepDelay = (i) => new Promise(r => setTimeout(r, i * 800))
-    setStepIdx(0)
-    setTimeout(() => setStepIdx(1), 800)
-
-    addLog('dl-cmd', `> Engaging LLM synthesis: ${inquiry.task_type}`)
-    addLog('dl-sys', '  [SYSTEM] Synthesizing code for standard CPU environment...')
-
-    setTimeout(() => {
-      setStepIdx(2)
-      addLog('dl-sys', '  [SYSTEM] Synthesizing code for accelerated GPU environment...')
-    }, 1600)
-
-    setTimeout(() => {
-      setStepIdx(3)
-      addLog('dl-sys', '  [PROCESS] Initializing Modal sandboxes (CPU + GPU concurrently)...')
-    }, 2400)
+    setResult(null)
+    setError(null)
+    setSummary('')
+    setStatusWord(randomStatusWord())
+    setAnswer('')
+    setCurrentStep(0)
+    setMaxSteps(0)
+    setStreamPhase('')
+    setStreamTokens('')
+    setStreamCode('')
+    setRetryCount(0)
+    tokenBufRef.current = ''
+    if (tokenTimerRef.current) { clearTimeout(tokenTimerRef.current); tokenTimerRef.current = null }
 
     try {
-      const res = await fetch('/api/benchmark', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: inquiry.query, task_type: inquiry.task_type }),
-      })
-      if (!res.ok) {
-        let errMsg = `HTTP ${res.status}`
-        try {
-          const err = await res.json()
-          errMsg = err.detail || errMsg
-        } catch { /* response body wasn't JSON */ }
-        throw new Error(errMsg)
-      }
-      const data = await res.json()
-
-      setStepIdx(4)
-      setApiResult(data)
-
-      // Log results
-      const cpuS = data.cpu.execution_time_sec
-      const gpuS = data.gpu.execution_time_sec
-      const wallS = data.total_wall_time_sec
-
-      if (cpuS > 0) addLog('dl-ok', `  [SUCCESS] CPU execution concluded in ${cpuS.toFixed(3)}s`)
-      if (gpuS > 0) addLog('dl-ok', `  [SUCCESS] GPU execution concluded in ${gpuS.toFixed(3)}s`)
-
-      // Log sandbox notes
-      data.gpu.logs.slice(-3).forEach(l => addLog('dl-sys', `  [GPU] ${l}`))
-      data.cpu.logs.slice(-3).forEach(l => addLog('dl-sys', `  [CPU] ${l}`))
-
-      addLog('dl-cmd', `> Total wall time: ${wallS.toFixed(1)}s`)
-
-      if (cpuS > 0 && gpuS > 0) {
-        const mult = cpuS / gpuS
-        if (mult > 1) addLog('dl-ok', `  [RESULT] GPU is ${mult.toFixed(1)}x faster than CPU`)
-        else addLog('dl-fix', `  [RESULT] CPU is ${(1/mult).toFixed(1)}x faster at this scale`)
-      }
-
-      setTimeout(() => setShowResults(true), 300)
-      setTimeout(() => setShowSpeedup(true), 600)
-
+      await analyzeQueryStream(query, taskType, {
+        onStatus: (data) => {
+          setStreamPhase(data.phase)
+          if (data.step) setCurrentStep(data.step)
+          if (data.max_steps) setMaxSteps(data.max_steps)
+          if (data.platform) setStreamPlatform(data.platform)
+        },
+        onToken: (token) => {
+          tokenBufRef.current += token
+          if (!tokenTimerRef.current) {
+            const flushTokens = () => {
+              const slice = tokenBufRef.current.slice(0, 5)
+              if (slice) {
+                setStreamTokens(prev => prev + slice)
+                tokenBufRef.current = tokenBufRef.current.slice(5)
+              }
+              if (tokenBufRef.current.length > 0) {
+                tokenTimerRef.current = setTimeout(flushTokens, 50)
+              } else {
+                tokenTimerRef.current = null
+              }
+            }
+            tokenTimerRef.current = setTimeout(flushTokens, 50)
+          }
+        },
+        onCodeReady: (data) => {
+          const code = data.code
+          if (tokenTimerRef.current) { clearTimeout(tokenTimerRef.current); tokenTimerRef.current = null }
+          tokenBufRef.current = ''
+          setStreamCode(code)
+          setStreamPhase('code')
+          let i = 0
+          const animate = () => {
+            if (i < code.length) {
+              const end = Math.min(i + 3, code.length)
+              setStreamTokens(code.slice(0, end))
+              i = end
+              if (i < code.length) {
+                tokenTimerRef.current = setTimeout(animate, 40)
+              } else {
+                tokenTimerRef.current = null
+              }
+            }
+          }
+          tokenTimerRef.current = setTimeout(animate, 40)
+        },
+        onResult: (data) => {
+          setResult({ results: data.results, stdout: data.stdout, stderr: data.stderr, success: data.success, step: data.step, code: streamCode })
+          if (data.success) setStreamPhase('result')
+        },
+        onAnswer: (text) => {
+          setAnswer(text)
+          setStreamPhase('answer')
+        },
+        onSummary: (text) => {
+          setSummary(text)
+        },
+        onRetry: (data) => {
+          setRetryCount(data.attempt)
+          setStreamPhase('executing')
+        },
+        onLog: (msg) => {
+          // could display in a log panel
+        },
+        onError: (msg) => {
+          setError(msg)
+          setStreamPhase('error')
+        },
+        onDone: () => {
+          if (tokenBufRef.current) {
+            setStreamTokens(prev => prev + tokenBufRef.current)
+            tokenBufRef.current = ''
+          }
+          setIsRunning(false)
+          setStreamPhase(prev => prev === 'done' ? 'done' : 'done')
+        },
+      }, selectedPlatform)
     } catch (err) {
-      setApiError(err.message)
-      setStepIdx(STEPS.length - 1)
-      addLog('dl-err', `  [FAULT] ${err.message}`)
+      setError(err.message)
+      setStreamPhase('error')
     } finally {
       setIsRunning(false)
     }
   }
 
-  const cpuS = apiResult?.cpu?.execution_time_sec ?? 0
-  const gpuS = apiResult?.gpu?.execution_time_sec ?? 0
-  const maxS = Math.max(cpuS, gpuS, 0.001)
-  const cpuPct = (cpuS / maxS * 100).toFixed(1)
-  const gpuPct = (gpuS / maxS * 100).toFixed(1)
-  const speedupMult = cpuS > 0 && gpuS > 0 ? cpuS / gpuS : null
-  const gpuWins = speedupMult && speedupMult > 1
-
-  const liveRows = apiResult
-    ? (apiResult.gpu?.results?.length > 0 ? apiResult.gpu.results : apiResult.cpu?.results ?? [])
-    : []
-
-  const inquiry = INQUIRIES[activeIdx]
+  const previewRows = datasetInfo?.preview ?? []
+  const resultRows = result?.results ?? []
+  const platform = result?.platform ?? ''
+  const execTime = result?.execution_time_sec ?? 0
+  const warmupTime = result?.warmup_time_sec ?? 0
 
   return (
     <div className="container">
-      {/* MASTHEAD */}
       <header className="masthead">
-        <h1>DataSense / GPU</h1>
+        <h1>DataSense</h1>
         <div className="masthead-meta">
-          <span>Vol. 26 — No. 07</span>
-          <div className="status-indicator">
+          <span>Data Analysis Platform</span>
+          <span className="status-indicator">
             <span className="status-dot" />
-            RAPIDS Environment Online
-          </div>
-          <span>Data Architecture Review</span>
+            {datasetInfo ? `${datasetInfo.row_count.toLocaleString()} rows` : 'Loading...'}
+          </span>
+          <span>v2.0</span>
         </div>
       </header>
 
-      {/* THE BRIEF */}
-      <section className="brief-section">
-        <aside className="query-sidebar">
-          <span className="section-kicker">Select Inquiry</span>
-          <div className="query-pills">
-            {INQUIRIES.map((inq, i) => (
-              <button key={i} className={`qpill${i === activeIdx ? ' active' : ''}`} onClick={() => selectInquiry(i)}>
-                {inq.label}
-              </button>
-            ))}
-          </div>
-        </aside>
-
-        <main className="query-main">
-          <span className="section-kicker">The Brief</span>
-          <div className="query-input-wrapper">
-            <textarea
-              className="query-input"
-              rows={3}
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder="Formulate your inquiry..."
-            />
-          </div>
-          <div className="run-action">
-            <div className="run-meta">
-              Dataset: Synthetic transactions (1M rows)<br />
-              Model: Gemma-4-E2B (LoRA) via Modal
-            </div>
-            <button className="run-btn" disabled={isRunning} onClick={runPipeline}>
-              {isRunning ? 'Running…' : 'Execute'}
+      <section className="dataset-section">
+        <div className="dataset-header">
+          <span className="section-kicker">Working Dataset</span>
+          <div className="dataset-controls">
+            <select
+              className="dataset-select"
+              onChange={e => switchDataset(e.target.value)}
+              defaultValue=""
+              disabled={loadingDataset}
+            >
+              <option value="" disabled>Switch dataset{'\u2026'}</option>
+              {availableDatasets.map(ds => (
+                <option key={ds.key} value={ds.key}>
+                  {ds.label}{ds.cached ? '' : ' \u2601'}
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn-outline upload-btn"
+              onClick={() => fileRef.current?.click()}
+              disabled={uploading}
+            >
+              {uploading ? 'Uploading...' : '\u2B06 Upload CSV'}
             </button>
+            <input ref={fileRef} type="file" accept=".csv" onChange={handleUpload} hidden />
           </div>
-        </main>
+        </div>
+        <div key={datasetInfo?.source ?? 'empty'} className={`dataset-card${loadingDataset ? ' refreshing' : ' refreshed'}`}>
+          <div className="dataset-card-body">
+            {loadingDataset ? (
+              <div className="dataset-refresh-pulse">
+                <span className="refresh-line" />
+                <span className="refresh-line" />
+                <span className="refresh-line" />
+                <span className="refresh-line" />
+              </div>
+            ) : (
+              <>
+                <div className="dataset-meta">
+                  {datasetInfo ? (
+                    <>
+                      <span className="dataset-stat">
+                        <span className="stat-value">{datasetInfo.row_count.toLocaleString()}</span>
+                        <span className="stat-label">rows</span>
+                      </span>
+                      <span className="dim-bullet" />
+                      <span className="dataset-stat">
+                        <span className="stat-value">{datasetInfo.column_count}</span>
+                        <span className="stat-label">columns</span>
+                      </span>
+                      <span className="dim-bullet" />
+                      <span className="dataset-source">{datasetInfo.source}</span>
+                    </>
+                  ) : datasetError ? (
+                    <span className="dataset-error">Dataset unavailable: {datasetError}</span>
+                  ) : (
+                    <span className="dataset-loading">Loading{'\u2026'}</span>
+                  )}
+                </div>
+                {previewRows.length > 0 && (
+                  <div className="preview-table">
+                    <DataTable rows={previewRows} dense />
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+        {error && !isRunning && <div className="flash-error">{error}</div>}
       </section>
 
-      {/* PIPELINE */}
-      <div className="pipeline">
-        {STEPS.map((step, i) => (
-          <div key={i} className={`pipe-step${i === stepIdx ? ' active' : i < stepIdx ? ' done' : ''}`}>
-            <span className="pipe-num">{ROMAN[i]}</span>
-            <span className="pipe-label">{step}</span>
-          </div>
-        ))}
-      </div>
+      <hr className="separator" />
 
-      {/* ERROR BANNER */}
-      {apiError && (
-        <div className="error-banner">⚠ API Error: {apiError}</div>
-      )}
-
-      {/* SYNTHESIZED LOGIC */}
-      <div className="logic-section">
-        <h2 className="section-title">Synthesized Logic</h2>
-        <div className="logic-grid">
-          <div className="figure">
-            <div className="figure-caption">
-              <span>Figure A: CPU Implementation</span>
-              <span className="caption-meta">{apiResult ? `${cpuS.toFixed(3)}s execution` : '—'}</span>
-            </div>
-            <div className="code-block">
-              {apiResult?.cpu_code
-                ? apiResult.cpu_code
-                : <span className="cm">// Awaiting synthesis...</span>
-              }
-            </div>
-          </div>
-          <div className="figure">
-            <div className="figure-caption">
-              <span>Figure B: GPU Implementation (cuDF)</span>
-              <span className="caption-meta">{apiResult ? `${gpuS.toFixed(3)}s execution` : '—'}</span>
-            </div>
-            <div className="code-block">
-              {apiResult?.gpu_code
-                ? apiResult.gpu_code
-                : <span className="cm">// Awaiting synthesis...</span>
-              }
-            </div>
-          </div>
+      <section className="brief-section">
+        <span className="section-kicker">The Brief</span>
+        <div className="query-area">
+          <textarea
+            className="query-input"
+            rows={3}
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onFocus={handleCustom}
+            placeholder="Describe the analysis you want to perform..."
+          />
         </div>
-
-        {/* DEBUG LOG */}
-        <div className="debug-log-wrapper" ref={debugRef}>
-          {debugLines.map((line, i) => (
-            <span key={i} className={`dl-line ${line.cls}`}>{line.text}</span>
+        <div className="preset-row">
+          {PRESETS.map((p, i) => (
+            <button
+              key={i}
+              className={`preset-btn${i === activePreset ? ' active' : ''}`}
+              onClick={() => selectPreset(i)}
+            >
+              {p.label}
+            </button>
           ))}
+          <button
+            className={`preset-btn${activePreset === -1 ? ' active' : ''}`}
+            onClick={handleCustom}
+          >
+            + Custom
+          </button>
         </div>
-      </div>
+        <div className="action-row">
+          <span className="action-hint">
+            <select className="platform-select" value={selectedPlatform} onChange={e => setSelectedPlatform(e.target.value)} disabled={isRunning}>
+              <option value="auto">Auto-detect platform</option>
+              <option value="cpu">CPU (pandas/sklearn)</option>
+              <option value="gpu">GPU (cuDF/cuML)</option>
+            </select>
+          </span>
+          <button className="run-btn" disabled={isRunning || !query.trim()} onClick={runAnalysis}>
+            {isRunning ? 'Running\u2026' : '\u25B6 Execute Analysis'}
+          </button>
+        </div>
+      </section>
 
       <hr className="separator" />
 
-      {/* EXECUTION ANALYSIS */}
-      <div className="execution-section">
-        <h2 className="section-title">Execution Analysis</h2>
-        <div className="analysis-grid">
-          {/* Race bars */}
-          <div className="metrics-col">
-            <div className="race-container stacked">
-              <div className="race-row">
-                <div className="race-label cpu">
-                  <span>Standard CPU</span>
-                  <span className="race-timer">{apiResult ? `${cpuS.toFixed(3)}s` : '—'}</span>
-                </div>
-                <div className="race-track">
-                  <div className="race-fill cpu-fill" style={{ width: apiResult ? `${cpuPct}%` : '0%' }} />
-                </div>
-              </div>
-              <div className="race-row">
-                <div className="race-label gpu">
-                  <span>Accelerated GPU</span>
-                  <span className="race-timer">{apiResult ? `${gpuS.toFixed(3)}s` : '—'}</span>
-                </div>
-                <div className="race-track">
-                  <div className="race-fill gpu-fill" style={{ width: apiResult ? `${gpuPct}%` : '0%' }} />
-                </div>
-              </div>
-            </div>
+      <section className="results-section">
+        {error && (
+          <div className="error-banner">{error}</div>
+        )}
 
-            <div className={`speedup-callout${showSpeedup ? ' visible' : ''}`}>
-              {speedupMult ? (
-                <>
-                  <div className={`speedup-huge${!gpuWins ? ' warn' : ''}`}>
-                    {gpuWins ? `${speedupMult.toFixed(1)}×` : `${(1/speedupMult).toFixed(1)}×`}
+        {(isRunning || streamPhase) && (
+          <div className="stream-panel">
+            <div className="stream-phase">
+              <span className={`phase-dot ${streamPhase}`} />
+              {streamPhase === 'routing' && 'Starting agent...'}
+              {streamPhase === 'reasoning' && currentStep > 0 && `Step ${currentStep}/${maxSteps}`}
+              {streamPhase === 'code' && `Code generated (step ${result?.step || currentStep})`}
+              {streamPhase === 'executing' && `Executing step ${currentStep}...`}
+              {streamPhase === 'result' && `Step ${result?.step || currentStep} complete`}
+              {streamPhase === 'answer' && 'Answer found'}
+              {streamPhase === 'error' && 'Error'}
+              {streamPhase === '' && 'Starting...'}
+              {streamPhase === 'done' && 'Done'}
+            </div>
+            {currentStep > 0 && (
+              <div className="step-track">
+                {Array.from({length: maxSteps || 8}, (_, i) => (
+                  <span key={i} className={`step-dot${i < currentStep ? ' done' : ''}${i === currentStep - 1 ? ' active' : ''}${i === (result?.step || currentStep) - 1 && streamPhase === 'executing' ? ' running' : ''}`} />
+                ))}
+              </div>
+            )}
+            {streamTokens && streamPhase === 'code' && (
+              <div className="generated-code">
+                <div className="code-header" style={{cursor: 'pointer'}}>
+                  <span>Generated Code</span>
+                  <span className="code-lang">Python</span>
+                </div>
+                <pre className={`stream-code streaming`}>{streamTokens}</pre>
+              </div>
+            )}
+          </div>
+        )}
+
+        {(isRunning || answer) && (
+          <div className="answer-card">
+            <span className="answer-label">Result</span>
+            <p className="answer-text">{summary || (statusWord ? `${statusWord}...` : '')}</p>
+          </div>
+        )}
+
+        {(result || answer) && (
+          <>
+            {result && result.results && result.results.length > 0 && (
+              <>
+                <div className="results-header">
+                  <h2 className="section-title">Results</h2>
+                  <div className="result-meta">
+                    {result.success === false && <span className="warmup-note" style={{color: 'var(--alert)'}}>Execution error</span>}
+                    {result.stderr && <span className="warmup-note" style={{color: 'var(--alert)'}}>{result.stderr.slice(0, 100)}</span>}
                   </div>
-                  <div className="speedup-text">
-                    <h4>{gpuWins ? 'GPU Acceleration' : 'CPU Advantage'}</h4>
-                    <p>
-                      {gpuWins
-                        ? `GPU completed ${speedupMult.toFixed(1)}× faster than CPU baseline on this query.`
-                        : `CPU proved faster at this data scale. GPU excels at higher row counts.`
-                      }
-                    </p>
-                  </div>
-                </>
-              ) : (
-                <div className="speedup-text">
-                  <h4>Performance Multiplier</h4>
-                  <p>Execute a query to see real benchmark results.</p>
                 </div>
-              )}
-            </div>
-          </div>
+                <DataTable rows={resultRows} />
+              </>
+            )}
 
-          {/* Results table */}
-          <div className="results-col">
-            <div className={`results-wrapper${showResults ? ' visible' : ''}`}>
-              <div className="results-header">
-                <h3 className="results-title">{inquiry.resultsTitle}</h3>
-                <span className="results-count">
-                  {liveRows.length > 0 ? `${liveRows.length} records` : '—'}
-                </span>
-              </div>
-              <ResultsTable rows={liveRows} />
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <hr className="separator" />
-
-      {/* APPENDIX */}
-      <div className="appendix-grid" ref={appendixRef}>
-        <div>
-          <span className="section-kicker">Appendix A</span>
-          <h2 className="section-title" style={{ fontSize: '2rem' }}>Benchmarking at Scale</h2>
-          <p style={{ fontFamily: 'var(--sans)', fontSize: '0.8rem', color: 'var(--ink-light)', marginBottom: '2rem', maxWidth: '600px' }}>
-            Empirical evaluation of cuDF versus pandas across a 20,000,000 row dataset. Execution environment: NVIDIA Tesla T4.
-          </p>
-          <div className="chart-container">
-            {SWEEP_DATA.map((row, i) => (
-              <div key={i} className="chart-row">
-                <div className="chart-lbl">{row.label}<small>{row.sub}</small></div>
-                <div className="chart-bar-area">
-                  <div
-                    className={`chart-bar${row.type === 'gpu' ? ' gpu-bar' : row.type === 'slow' ? ' slow-bar' : ''}`}
-                    style={{ width: chartsVisible ? `${row.pct}%` : '0%' }}
-                  />
+            {streamTokens && streamPhase !== 'code' && (
+              <div className="generated-code">
+                <div className="code-header" onClick={() => setCodeCollapsed(!codeCollapsed)} style={{cursor: 'pointer'}}>
+                  <span>Generated Code</span>
+                  <span className="code-lang">Python</span>
+                  <span className="collapse-icon">{codeCollapsed ? '\u25B8' : '\u25BE'}</span>
                 </div>
-                <div
-                  className="chart-val"
-                  style={{ color: row.type === 'gpu' ? 'var(--gpu-accent)' : row.type === 'slow' ? 'var(--alert)' : 'inherit' }}
-                >
-                  {row.val}×
-                </div>
+                {!codeCollapsed && (
+                  <pre className="code-block">{streamTokens}</pre>
+                )}
               </div>
-            ))}
-          </div>
-        </div>
+            )}
+          </>
+        )}
 
-        <div>
-          <span className="section-kicker">Appendix B</span>
-          <h2 className="section-title" style={{ fontSize: '2rem' }}>Key Metrics</h2>
-          <div className="stats-grid">
-            <div className="stat-box">
-              <div className="stat-val accent">
-                {speedupMult && gpuWins ? `${speedupMult.toFixed(1)}×` : '215×'}
-              </div>
-              <div className="stat-lbl">{speedupMult && gpuWins ? 'Live GPU Speedup' : 'Peak RF Speedup'}</div>
-            </div>
-            <div className="stat-box">
-              <div className="stat-val">58.9×</div>
-              <div className="stat-lbl">Rolling Window (20M)</div>
-            </div>
-            <div className="stat-box">
-              <div className="stat-val muted">{apiResult ? `${cpuS.toFixed(2)}s` : '81s'}</div>
-              <div className="stat-lbl">{apiResult ? 'CPU This Run' : 'CPU Baseline (RF)'}</div>
-            </div>
-            <div className="stat-box">
-              <div className="stat-val">{apiResult ? `${gpuS.toFixed(2)}s` : '0.38s'}</div>
-              <div className="stat-lbl">{apiResult ? 'GPU This Run' : 'GPU Execution (RF)'}</div>
-            </div>
-            <div className="stat-box">
-              <div className="stat-val">1M</div>
-              <div className="stat-lbl">Records Processed</div>
-            </div>
-            <div className="stat-box">
-              <div className="stat-val">8/8</div>
-              <div className="stat-lbl">Synthesis Success</div>
-            </div>
-          </div>
-        </div>
-      </div>
+        {!result && !error && !isRunning && (
+          <p className="empty-state">Select a preset or type a custom query and execute.</p>
+        )}
+      </section>
     </div>
   )
 }

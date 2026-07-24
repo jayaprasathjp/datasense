@@ -98,10 +98,10 @@ __warmup_elapsed = time.perf_counter() - __warmup_t0
 print(f"__WARMUP_TIME_SEC__:{{__warmup_elapsed}}", file=sys.stderr)
 
 # ---------- User code (timed AFTER warmup) ----------
-result = None
+__globals = {{"df": df, "np": np}}
 __t0 = time.perf_counter()
 try:
-    exec({repr(user_code)}, {{"df": df, "np": np}})
+    exec({repr(user_code)}, __globals)
 except Exception as _user_exc:
     print(f"Exception in user code: {{type(_user_exc).__name__}}: {{_user_exc}}", file=sys.stderr)
     sys.exit(1)
@@ -110,6 +110,7 @@ finally:
     print(f"__EXEC_TIME_SEC__:{{__elapsed}}", file=sys.stderr)
 
 # ---------- Serialise result ----------
+result = __globals.get("result")
 try:
     # cuDF -> pandas for JSON serialisation
     if hasattr(result, "to_pandas"):

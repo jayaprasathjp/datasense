@@ -37,6 +37,8 @@ def _looks_relevant_by_keywords(query: str) -> bool:
     return any(kw in q for kw in _KEYWORDS)
 
 
+from app.services.pii_scanner import contains_pii
+
 def validate_query(query: str) -> tuple[bool, str | None]:
     """
     Checks whether a user-submitted natural language query is plausibly
@@ -55,6 +57,9 @@ def validate_query(query: str) -> tuple[bool, str | None]:
     """
     if not query or not query.strip():
         return False, "The query is empty. Please enter a question about the dataset."
+
+    if contains_pii(query):
+        return False, "PII DETECTED: The query contains sensitive information (e.g., email, phone number, SSN). Please remove it and try again."
 
     if _looks_relevant_by_keywords(query):
         return True, None

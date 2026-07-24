@@ -1,89 +1,28 @@
+import asyncio
+import json
 import logging
 import httpx
 import re
 from app.core.config import settings
-from app.data.bigquery import DATASET_SCHEMA
-from app.services.cache import get_cached_code, set_cached_code
+import app.data.bigquery as bq
 
 logger = logging.getLogger(__name__)
 
 # ── Demo mode fallback ─────────────────────────────────────────
 # Pre-written code for each known inquiry so the frontend works
 # without a live Modal endpoint (cold-start can take 10+ min).
-
-MODEL_NAME = "Gemma-4-E2B (LoRA) via Modal"
-
 MOCK_CODE: dict[str, dict[str, str]] = {
     "gpu": {
-        "predict risk_label": """
-import cuml
-from cuml.ensemble import RandomForestClassifier as cuRFC
-features = ["feat_1","feat_2","feat_3","feat_4","price","qty","discount_pct","ticket_age_hours","sentiment","days_since_restock"]
-X = df[features].astype("float32")
-y = df["risk_label"].astype("int32")
-clf = cuRFC(n_estimators=50, max_depth=10, random_state=42)
-clf.fit(X, y)
-proba = clf.predict_proba(X)
-df["pred_risk"] = proba.iloc[:, 1]
-result = df.sort_values("pred_risk", ascending=False)[["risk_label","pred_risk"] + features].head(20).to_pandas()
-""",
-        "rolling": """
-df_sorted = df.sort_values(["store_id","date"])
-df_sorted["revenue_7d_avg"] = df_sorted.groupby("store_id")["revenue"].transform(lambda x: x.rolling(7, min_periods=1).mean())
-df_sorted["revenue_pct_diff"] = (df_sorted["revenue"] - df_sorted["revenue_7d_avg"]) / df_sorted["revenue_7d_avg"]
-anomalies = df_sorted[df_sorted["revenue_pct_diff"] < -0.2]
-result = anomalies[["store_id","date","revenue","revenue_7d_avg","revenue_pct_diff"]].drop_duplicates("store_id").head(10).to_pandas()
-""",
-        "priority": """
-df["priority_score"] = (df["return_flag"] * 0.45 + (df["ticket_age_hours"] / (df["ticket_age_hours"].max() + 1e-9)) * 0.20 + (1.0 - df["sentiment"].clip(-2, 2) / 2) * 0.20 + (df["days_since_restock"] / (df["days_since_restock"].max() + 1e-9)) * 0.15)
-result = df.sort_values("priority_score", ascending=False)[["store_id","region","return_flag","ticket_age_hours","days_since_restock","sentiment","priority_score","margin"]].head(25).to_pandas()
-""",
-        "dashboard": """
-result = df.groupby(["region","support_tier"]).agg(total_revenue=("revenue","sum"),avg_margin=("margin","mean"),return_rate=("return_flag","mean"),avg_ticket_age=("ticket_age_hours","mean"),avg_sentiment=("sentiment","mean")).reset_index().to_pandas()
-""",
+        "fallback": "result = df.head(100).to_pandas()",
     },
     "cpu": {
-        "predict risk_label": """
-import pandas as pd
-from sklearn.ensemble import RandomForestClassifier as RF
-features = ["feat_1","feat_2","feat_3","feat_4","price","qty","discount_pct","ticket_age_hours","sentiment","days_since_restock"]
-X = df[features]
-y = df["risk_label"]
-clf = RF(n_estimators=50, max_depth=10, random_state=42)
-clf.fit(X, y)
-proba = clf.predict_proba(X)
-df["pred_risk"] = proba[:, 1]
-result = df.sort_values("pred_risk", ascending=False)[["risk_label","pred_risk"] + features].head(20)
-""",
-        "rolling": """
-df_sorted = df.sort_values(["store_id","date"])
-df_sorted["revenue_7d_avg"] = df_sorted.groupby("store_id")["revenue"].transform(lambda x: x.rolling(7, min_periods=1).mean())
-df_sorted["revenue_pct_diff"] = (df_sorted["revenue"] - df_sorted["revenue_7d_avg"]) / df_sorted["revenue_7d_avg"]
-anomalies = df_sorted[df_sorted["revenue_pct_diff"] < -0.2]
-result = anomalies[["store_id","date","revenue","revenue_7d_avg","revenue_pct_diff"]].drop_duplicates("store_id").head(10)
-""",
-        "priority": """
-df["priority_score"] = (df["return_flag"] * 0.45 + (df["ticket_age_hours"] / (df["ticket_age_hours"].max() + 1e-9)) * 0.20 + (1.0 - df["sentiment"].clip(-2, 2) / 2) * 0.20 + (df["days_since_restock"] / (df["days_since_restock"].max() + 1e-9)) * 0.15)
-result = df.sort_values("priority_score", ascending=False)[["store_id","region","return_flag","ticket_age_hours","days_since_restock","sentiment","priority_score","margin"]].head(25)
-""",
-        "dashboard": """
-result = df.groupby(["region","support_tier"]).agg(total_revenue=("revenue","sum"),avg_margin=("margin","mean"),return_rate=("return_flag","mean"),avg_ticket_age=("ticket_age_hours","mean"),avg_sentiment=("sentiment","mean")).reset_index()
-""",
+        "fallback": "result = df.head(100)",
     },
 }
 
 def _get_mock_code(query: str, mode: str) -> str | None:
-    """Return pre-written code for a known query, or None."""
-    q = query.lower()
-    if "risk" in q or "classif" in q:
-        return MOCK_CODE[mode]["predict risk_label"]
-    if "rolling" in q or "7-day" in q or "anomal" in q:
-        return MOCK_CODE[mode]["rolling"]
-    if "priorit" in q or "triage" in q:
-        return MOCK_CODE[mode]["priority"]
-    if "dashboard" in q or "summar" in q or "aggregat" in q:
-        return MOCK_CODE[mode]["dashboard"]
-    return None
+    """Return fallback code when LLM is unavailable."""
+    return MOCK_CODE[mode]["fallback"]
 
 CUDF_CHEATSHEET = """
 # ════════════════════════════════════════════════════════════════
@@ -173,9 +112,7 @@ SYSTEM_PROMPT_PANDAS = (
 ).strip()
 
 
-import json
-
-def _call_modal(system_prompt: str, user_prompt: str, token_callback=None) -> str:
+def _call_modal(system_prompt: str, user_prompt: str) -> str:
     """Helper to send prompt to the Modal vLLM serverless inference endpoint.
     
     Falls back to mock code if the endpoint is unreachable (cold-start, auth error, etc.).
@@ -200,55 +137,105 @@ def _call_modal(system_prompt: str, user_prompt: str, token_callback=None) -> st
         "temperature": 0.2
     }
     
-    if token_callback:
-        payload["stream"] = True
-
-    # We use a long timeout since Modal might have to cold-start
-    # Modal uses 303 Redirects for long-running executions, so follow_redirects=True is required
     try:
-        with httpx.Client(timeout=300.0, follow_redirects=True) as client:
-            if token_callback:
-                full_text = []
-                with client.stream("POST", settings.modal_url, headers=headers, json=payload) as resp:
-                    resp.raise_for_status()
-                    
-                    # Check if the server actually returned a stream
-                    content_type = resp.headers.get("content-type", "")
-                    if "text/event-stream" not in content_type:
-                        full_resp = resp.read()
-                        try:
-                            data = json.loads(full_resp)
-                            content = data["choices"][0]["message"]["content"]
-                            token_callback(content)
-                            return content
-                        except Exception as e:
-                            raise ValueError(f"Failed to parse non-stream response: {full_resp}") from e
-
-                    for line in resp.iter_lines():
-                        if line.startswith("data: "):
-                            data_str = line[6:]
-                            if data_str.strip() == "[DONE]":
-                                break
-                            try:
-                                data_json = json.loads(data_str)
-                                delta = data_json["choices"][0].get("delta", {})
-                                if "content" in delta:
-                                    token = delta["content"]
-                                    full_text.append(token)
-                                    token_callback(token)
-                            except (json.JSONDecodeError, KeyError, IndexError):
-                                pass
-                result_text = "".join(full_text)
-            else:
-                resp = client.post(settings.modal_url, headers=headers, json=payload)
-                resp.raise_for_status()
-                result_text = resp.json()["choices"][0]["message"]["content"]
-            
+        with httpx.Client(timeout=200.0, follow_redirects=True) as client:
+            resp = client.post(settings.modal_url, headers=headers, json=payload)
+            resp.raise_for_status()
+            result_text = resp.json()["choices"][0]["message"]["content"]
         logger.debug(f"LLM response ({len(result_text)} chars): {result_text[:500]}")
         return result_text
     except Exception as e:
         logger.warning(f"Modal LLM call failed ({e}) — falling back to mock code.")
         return ""
+
+
+async def _call_modal_stream(system_prompt: str, user_prompt: str, platform: str = "cpu"):
+    """Stream code from the Modal LLM endpoint, yielding tokens char-by-char.
+
+    Tries SSE streaming first (new Modal app). Falls back to full JSON response
+    (old Modal app) and emits characters one at a time.
+    Falls back to mock code on timeout/failure after 30s.
+    """
+    if not settings.modal_url or not settings.modal_api_key:
+        mock = MOCK_CODE.get(platform, {}).get("fallback", MOCK_CODE["cpu"]["fallback"])
+        for ch in mock:
+            yield {"token": ch}
+        yield {"code": mock}
+        yield {"done": True}
+        return
+
+    logger.info(f"Streaming from Modal LLM Endpoint: {settings.modal_url}")
+
+    headers = {
+        "Authorization": f"Bearer {settings.modal_api_key}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "max_new_tokens": 512,
+        "temperature": 0.2,
+        "stream": True,
+    }
+
+    accumulated = ""
+    is_sse = False
+    response_body = b""
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            async with client.stream("POST", settings.modal_url, headers=headers, json=payload) as resp:
+                resp.raise_for_status()
+                async for chunk in resp.aiter_bytes():
+                    response_body += chunk
+                    text = chunk.decode("utf-8", errors="replace")
+
+                    for line in text.splitlines():
+                        sl = line.strip()
+                        if sl.startswith("data: "):
+                            is_sse = True
+                            try:
+                                d = json.loads(sl[6:])
+                                if "token" in d:
+                                    accumulated += d["token"]
+                                    yield {"token": d["token"]}
+                                elif d.get("done"):
+                                    break
+                            except json.JSONDecodeError:
+                                pass
+
+        if not is_sse:
+            full_body = response_body.decode("utf-8", errors="replace")
+            try:
+                resp_data = json.loads(full_body)
+                full_text = resp_data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if full_text:
+                    for ch in full_text:
+                        accumulated += ch
+                        yield {"token": ch}
+                        await asyncio.sleep(0)
+                else:
+                    accumulated = full_text
+            except json.JSONDecodeError:
+                accumulated = full_body
+                logger.warning("Could not parse Modal response as JSON — sending raw.")
+
+        logger.debug(f"LLM response accumulated ({len(accumulated)} chars)")
+    except Exception as e:
+        logger.warning(f"Modal LLM stream failed ({e}) — sending empty code.")
+
+    if not accumulated.strip():
+        mock = MOCK_CODE.get(platform, {}).get("fallback", MOCK_CODE["cpu"]["fallback"])
+        for ch in mock:
+            accumulated += ch
+            yield {"token": ch}
+
+    yield {"code": accumulated}
+    yield {"done": True}
+
 
 def _ensure_result_assignment(code: str) -> str:
     """
@@ -306,41 +293,26 @@ def _extract_code(text: str) -> str:
     code = _ensure_result_assignment(code)
     return code
 
-def synthesize_code(query: str, task_type: str = "data_analysis", token_callback=None) -> str:
+def synthesize_code(query: str, task_type: str = "data_analysis") -> str:
     """
     Translates a natural language query into cuDF code using the fine-tuned model on Modal.
     Falls back to pre-written code if the LLM is unavailable.
     """
     logger.info(f"Synthesizing GPU (cuDF) code for query: {query}")
 
-    cached = get_cached_code(DATASET_SCHEMA, query, "gpu")
-    if cached:
-        logger.info("Using cached GPU code.")
-        if token_callback:
-            import time
-            for chunk in cached.split(" "):
-                token_callback(chunk + " ")
-                time.sleep(0.015)
-        return cached
-
-    from app.services.pii_scanner import redact_schema
-    redacted_schema = redact_schema(DATASET_SCHEMA)
-
     user_prompt = f"""
 Task Type: {task_type}
 Query: {query}
 
 Dataset schema:
-{redacted_schema}
+{bq.DATASET_SCHEMA}
 
 Assume there is a pre-loaded cuDF DataFrame named `df` with the columns above.
 """
-
-    model_output = _call_modal(SYSTEM_PROMPT_CUDF, user_prompt, token_callback)
+    model_output = _call_modal(SYSTEM_PROMPT_CUDF, user_prompt)
 
     if model_output.strip():
-        code = _extract_code(model_output)
-        return code
+        return _extract_code(model_output)
 
     mock = _get_mock_code(query, "gpu")
     if mock:
@@ -350,7 +322,8 @@ Assume there is a pre-loaded cuDF DataFrame named `df` with the columns above.
     logger.warning("No mock code available for this query — returning generic placeholder.")
     return "result = df.head(5).to_pandas()"
 
-def synthesize_cpu_code(query: str, task_type: str = "data_analysis", token_callback=None) -> str:
+
+def synthesize_cpu_code(query: str, task_type: str = "data_analysis") -> str:
     """
     Translates a natural language query into pandas code using the fine-tuned model on Modal.
     Uses SYSTEM_PROMPT_PANDAS — a separate prompt that explicitly forbids cudf/cuml.
@@ -358,33 +331,19 @@ def synthesize_cpu_code(query: str, task_type: str = "data_analysis", token_call
     """
     logger.info(f"Synthesizing CPU (pandas) code for query: {query}")
 
-    cached = get_cached_code(DATASET_SCHEMA, query, "cpu")
-    if cached:
-        logger.info("Using cached CPU code.")
-        if token_callback:
-            import time
-            for chunk in cached.split(" "):
-                token_callback(chunk + " ")
-                time.sleep(0.015)
-        return cached
-
-    from app.services.pii_scanner import redact_schema
-    redacted_schema = redact_schema(DATASET_SCHEMA)
-
     user_prompt = f"""
 Task Type: {task_type}
 Query: {query}
 
 Dataset schema:
-{redacted_schema}
+{bq.DATASET_SCHEMA}
 
 Assume there is a pre-loaded pandas DataFrame named `df` with the columns above.
 """
-    model_output = _call_modal(SYSTEM_PROMPT_PANDAS, user_prompt, token_callback)
+    model_output = _call_modal(SYSTEM_PROMPT_PANDAS, user_prompt)
     
     if model_output.strip():
-        code = _extract_code(model_output)
-        return code
+        return _extract_code(model_output)
 
     mock = _get_mock_code(query, "cpu")
     if mock:
@@ -430,27 +389,79 @@ Output ONLY the corrected valid Python code. No markdown, no explanations.
     logger.warning("LLM fix unavailable — returning original code.")
     return original_code
 
-RELEVANCE_SYSTEM_PROMPT = (
-    "You are a strict relevance classifier for a data analytics platform.\n"
-    "You are given a dataset schema and a user's natural language question.\n"
-    "Decide whether the question can plausibly be answered using ONLY the columns in the schema.\n"
-    "Respond with EXACTLY one word: YES or NO. Nothing else."
+
+SUMMARY_PROMPT = (
+    "You are DataSense, a data-science assistant. "
+    "Given a user's query and the analysis results (a table of rows), "
+    "write a concise 2-3 sentence natural-language summary of what the results show. "
+    "Be specific — mention column names, values, and patterns you observe. "
+    "Interpret the numbers — e.g. 'the average revenue is $X', "
+    "'the highest correlated pair is Y and Z at 0.85', "
+    "'the top store by priority score is S042 at 0.82'. "
+    "Do NOT mention the code or technical implementation. "
+    "Just describe what the data says in plain English."
 )
 
 
-def check_query_relevance(query: str) -> bool | None:
+def _generate_summary(query: str, results: list, exec_context: str = "", platform: str = "cpu") -> str:
     """
-    Best-effort LLM relevance check, used as a fallback when the cheap keyword
-    heuristic (see app.services.query_validator) finds no signal at all.
+    Generate a natural-language summary of analysis results.
+    Calls Modal LLM with a short timeout (already warm from code generation),
+    falls back to a template summary.
+    """
+    has_rows = len(results) > 0 and len(results[0]) > 0 if results else False
 
-    Returns True/False, or None if the LLM call itself fails (e.g. Modal
-    credentials not configured) — callers should treat None as "unknown" and
-    fall back to a conservative default rather than raising.
-    """
-    user_prompt = f"Dataset schema:\n{DATASET_SCHEMA}\n\nUser question: {query}\n"
+    if not settings.modal_url or not settings.modal_api_key:
+        return _template_summary(results, exec_context)
+
+    if exec_context:
+        user_prompt = f"User query: {query}\n\nExecution output:\n{exec_context[:1500]}\n\nWrite a 2-3 sentence plain-English summary of what these results show."
+    elif has_rows:
+        sample = json.dumps(results[:5], default=str)
+        n_rows = len(results)
+        user_prompt = f"User query: {query}\n\nResults ({n_rows} rows):\n{sample}\n\nWrite a 2-3 sentence plain-English summary of what these results show."
+    else:
+        return f"The analysis for '{query}' is complete. Review the results above for details."
+
+    headers = {
+        "Authorization": f"Bearer {settings.modal_api_key}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messages": [
+            {"role": "system", "content": SUMMARY_PROMPT},
+            {"role": "user", "content": user_prompt}
+        ],
+        "max_new_tokens": 256,
+        "temperature": 0.3,
+    }
+
     try:
-        output = _call_modal(RELEVANCE_SYSTEM_PROMPT, user_prompt)
+        with httpx.Client(timeout=15.0, follow_redirects=True) as client:
+            resp = client.post(settings.modal_url, headers=headers, json=payload)
+            resp.raise_for_status()
+            text = resp.json()["choices"][0]["message"]["content"].strip()
+            if text:
+                return text
     except Exception as e:
-        logger.warning(f"Relevance check LLM call failed, falling back to heuristic only: {e}")
-        return None
-    return output.strip().upper().startswith("YES")
+        logger.warning(f"Summary LLM call failed ({e}) — using template.")
+
+    return _template_summary(results, exec_context)
+
+
+def _template_summary(results: list, exec_context: str = "") -> str:
+    if exec_context:
+        lines = [l for l in exec_context.splitlines() if l.strip()][:5]
+        preview = " | ".join(lines)
+        return f"The analysis shows: {preview[:300]}."
+    try:
+        flat = [r for sub in results if isinstance(sub, list) for r in sub] or results
+        flat = [r for r in flat if isinstance(r, dict)]
+        if flat:
+            cols = list(flat[0].keys())
+            col_list = ', '.join(cols[:5])
+            sample = ', '.join(f"{k}={v}" for k, v in list(flat[0].items())[:4])
+            return f"Analysis returned {len(flat)} rows (columns: {col_list}). Sample: {sample}."
+    except Exception:
+        pass
+    return "Analysis complete. Review the results above for details."

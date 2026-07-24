@@ -8,17 +8,17 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants (matching notebook Section C)
 # ─────────────────────────────────────────────────────────────────────────────
-DATA_SCALES = [100_000, 500_000, 1_000_000, 1_500_000]
+N_ROWS = 1_000_000
 N_STORES, N_PRODUCTS, N_USERS, N_REGIONS = 250, 2000, 50_000, 8
 
 # Global DataFrame
 global_df: pd.DataFrame | None = None
+_current_source: str = ""
 
-def get_parquet_path(scale: int) -> str:
-    """Returns the parquet path for a given row scale."""
-    return os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), f"data_{scale}.parquet"
-    )
+# Parquet path — one level above this file's directory (i.e. backend/app/data.parquet)
+PARQUET_FILE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data.parquet"
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -157,29 +157,58 @@ def load_bigquery_or_synthetic(n_rows: int) -> pd.DataFrame:
 # Public API
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _build_schema(df: pd.DataFrame) -> str:
+    """Build a schema description string from a DataFrame."""
+    lines = [f"Columns available in `df` ({len(df):,} rows, {len(df.columns)} cols):"]
+    for col in df.columns:
+        dtype = df[col].dtype
+        samples = df[col].dropna().iloc[:3].tolist()
+        sample_str = ", ".join(repr(s) if isinstance(s, str) else str(s) for s in samples)
+        lines.append(f"  - {col}: {dtype}  (e.g. {sample_str})")
+    return "\n".join(lines)
+
+
+def _set_dataframe(df: pd.DataFrame, source: str = "synthetic") -> None:
+    """Replace the global DataFrame (used by CSV upload or dataset loading)."""
+    global global_df, DATASET_SCHEMA, _current_source
+    global_df = df
+    _current_source = source
+    DATASET_SCHEMA = _build_schema(df)
+    logger.info(f"DataFrame replaced: {len(df):,} rows × {len(df.columns)} cols (source: {source})")
+
+
+def load_external_dataset(dataset_key: str) -> pd.DataFrame:
+    """Download and load a dataset from the registry, replacing global_df."""
+    from app.data.datasets import load_dataset as _dl
+    df = _dl(dataset_key)
+    _set_dataframe(df, source=dataset_key)
+
+    df.to_parquet(PARQUET_FILE_PATH, engine="pyarrow")
+    logger.info(f"Parquet updated at {PARQUET_FILE_PATH}")
+
+    return df
+
+
 def fetch_ecommerce_data() -> None:
     """
     Loads data (BigQuery or synthetic fallback) into global_df and writes
-    Parquet files for each data scale for Modal Sandbox upload.
+    a Parquet file at PARQUET_FILE_PATH for Modal Sandbox upload.
     """
-    global global_df
+    global global_df, DATASET_SCHEMA, _current_source
 
     if global_df is not None:
         logger.info("Data already loaded.")
         return
 
-    max_scale = max(DATA_SCALES)
-    logger.info(f"Loading {max_scale:,}-row dataset (BigQuery or synthetic fallback)...")
-    global_df = load_bigquery_or_synthetic(max_scale)
+    logger.info(f"Loading {N_ROWS:,}-row dataset (BigQuery or synthetic fallback)...")
+    global_df = load_bigquery_or_synthetic(N_ROWS)
+    _current_source = "thelook_ecommerce" if "user_id" in global_df.columns else "synthetic"
+    DATASET_SCHEMA = _build_schema(global_df)
     logger.info(f"Dataset ready: {global_df.shape[0]:,} rows × {global_df.shape[1]} cols")
 
-    for scale in DATA_SCALES:
-        path = get_parquet_path(scale)
-        logger.info(f"Writing Parquet for {scale:,} rows to {path}...")
-        sub_df = global_df.head(scale)
-        sub_df.to_parquet(path, engine="pyarrow")
-        
-    logger.info("Parquet exports complete.")
+    logger.info(f"Writing Parquet to {PARQUET_FILE_PATH} for Modal Sandbox transfer...")
+    global_df.to_parquet(PARQUET_FILE_PATH, engine="pyarrow")
+    logger.info("Parquet export complete.")
 
 
 def get_dataframe() -> pd.DataFrame:
@@ -190,48 +219,9 @@ def get_dataframe() -> pd.DataFrame:
     return global_df
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Single source of truth for the `df` schema — used to build both the LLM
-# prompt (DATASET_SCHEMA) and the /api/dataset-info response consumed by the
-# frontend, so the UI can never drift from what the model is actually told.
-# ─────────────────────────────────────────────────────────────────────────────
-DATASET_COLUMNS = [
-    {"name": "store_id",           "dtype": "int32",      "description": "Store identifier (0–249)"},
-    {"name": "product_id",         "dtype": "int32",      "description": "Product identifier (0–1999)"},
-    {"name": "date",               "dtype": "datetime64", "description": "Transaction date (2024-01-01 to 2024-12-31)"},
-    {"name": "region",             "dtype": "int8",       "description": "Region code (0–7)"},
-    {"name": "qty",                "dtype": "int16",      "description": "Units sold (1–9)"},
-    {"name": "price",              "dtype": "float64",    "description": "Unit price in USD"},
-    {"name": "discount_pct",       "dtype": "float64",    "description": "Discount fraction (0.0–0.35)"},
-    {"name": "return_flag",        "dtype": "int8",       "description": "1 = returned, 0 = kept"},
-    {"name": "support_tier",       "dtype": "int8",       "description": "Support tier (1–4)"},
-    {"name": "sentiment",          "dtype": "float64",    "description": "Customer sentiment score, ~N(0,1)"},
-    {"name": "ticket_age_hours",   "dtype": "float64",    "description": "Age of the support ticket in hours"},
-    {"name": "days_since_restock", "dtype": "int16",      "description": "Days since the product was last restocked"},
-    {"name": "feat_1",             "dtype": "float64",    "description": "Numeric feature 1"},
-    {"name": "feat_2",             "dtype": "float64",    "description": "Numeric feature 2"},
-    {"name": "feat_3",             "dtype": "float64",    "description": "Numeric feature 3"},
-    {"name": "feat_4",             "dtype": "float64",    "description": "Numeric feature 4"},
-    {"name": "revenue",            "dtype": "float64",    "description": "qty × price × (1 − discount_pct)"},
-    {"name": "margin",             "dtype": "float64",    "description": "Gross margin in USD"},
-    {"name": "risk_score",         "dtype": "float64",    "description": "Composite risk score (0–1)"},
-    {"name": "risk_label",         "dtype": "int8",       "description": "1 = high risk (top 25% by risk_score)"},
-    {"name": "target_flag",        "dtype": "int8",       "description": "Alias for risk_label"},
-    {"name": "target_value",       "dtype": "float64",    "description": "Alias for risk_score"},
-]
-
-# Schema description for LLM prompts — generated from DATASET_COLUMNS above.
-DATASET_SCHEMA = "Columns available in `df`:\n" + "\n".join(
-    f"  - {c['name']}: {c['dtype']:<10} ({c['description']})" for c in DATASET_COLUMNS
-)
-
-DATASET_NAME = "BigQuery thelook_ecommerce (synthetic-augmented)"
+def get_current_source() -> str:
+    """Returns the name of the currently loaded dataset source."""
+    return _current_source
 
 
-def get_dataset_info() -> dict:
-    """Static metadata describing the dataset served to the LLM/sandboxes, for the frontend."""
-    return {
-        "dataset_name": DATASET_NAME,
-        "row_count": max(DATA_SCALES),
-        "columns": DATASET_COLUMNS,
-    }
+DATASET_SCHEMA = "No dataset loaded yet."

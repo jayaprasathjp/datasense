@@ -3,12 +3,16 @@ import httpx
 import re
 from app.core.config import settings
 from app.data.bigquery import DATASET_SCHEMA
+from app.services.cache import get_cached_code, set_cached_code
 
 logger = logging.getLogger(__name__)
 
 # ── Demo mode fallback ─────────────────────────────────────────
 # Pre-written code for each known inquiry so the frontend works
 # without a live Modal endpoint (cold-start can take 10+ min).
+
+MODEL_NAME = "Gemma-4-E2B (LoRA) via Modal"
+
 MOCK_CODE: dict[str, dict[str, str]] = {
     "gpu": {
         "predict risk_label": """
@@ -169,7 +173,9 @@ SYSTEM_PROMPT_PANDAS = (
 ).strip()
 
 
-def _call_modal(system_prompt: str, user_prompt: str) -> str:
+import json
+
+def _call_modal(system_prompt: str, user_prompt: str, token_callback=None) -> str:
     """Helper to send prompt to the Modal vLLM serverless inference endpoint.
     
     Falls back to mock code if the endpoint is unreachable (cold-start, auth error, etc.).
@@ -194,17 +200,55 @@ def _call_modal(system_prompt: str, user_prompt: str) -> str:
         "temperature": 0.2
     }
     
+    if token_callback:
+        payload["stream"] = True
+
+    # We use a long timeout since Modal might have to cold-start
+    # Modal uses 303 Redirects for long-running executions, so follow_redirects=True is required
     try:
-        with httpx.Client(timeout=200.0, follow_redirects=True) as client:
-            resp = client.post(settings.modal_url, headers=headers, json=payload)
-            resp.raise_for_status()
-            result_text = resp.json()["choices"][0]["message"]["content"]
+        with httpx.Client(timeout=300.0, follow_redirects=True) as client:
+            if token_callback:
+                full_text = []
+                with client.stream("POST", settings.modal_url, headers=headers, json=payload) as resp:
+                    resp.raise_for_status()
+                    
+                    # Check if the server actually returned a stream
+                    content_type = resp.headers.get("content-type", "")
+                    if "text/event-stream" not in content_type:
+                        full_resp = resp.read()
+                        try:
+                            data = json.loads(full_resp)
+                            content = data["choices"][0]["message"]["content"]
+                            token_callback(content)
+                            return content
+                        except Exception as e:
+                            raise ValueError(f"Failed to parse non-stream response: {full_resp}") from e
+
+                    for line in resp.iter_lines():
+                        if line.startswith("data: "):
+                            data_str = line[6:]
+                            if data_str.strip() == "[DONE]":
+                                break
+                            try:
+                                data_json = json.loads(data_str)
+                                delta = data_json["choices"][0].get("delta", {})
+                                if "content" in delta:
+                                    token = delta["content"]
+                                    full_text.append(token)
+                                    token_callback(token)
+                            except (json.JSONDecodeError, KeyError, IndexError):
+                                pass
+                result_text = "".join(full_text)
+            else:
+                resp = client.post(settings.modal_url, headers=headers, json=payload)
+                resp.raise_for_status()
+                result_text = resp.json()["choices"][0]["message"]["content"]
+            
         logger.debug(f"LLM response ({len(result_text)} chars): {result_text[:500]}")
         return result_text
     except Exception as e:
         logger.warning(f"Modal LLM call failed ({e}) — falling back to mock code.")
         return ""
-
 
 def _ensure_result_assignment(code: str) -> str:
     """
@@ -262,12 +306,22 @@ def _extract_code(text: str) -> str:
     code = _ensure_result_assignment(code)
     return code
 
-def synthesize_code(query: str, task_type: str = "data_analysis") -> str:
+def synthesize_code(query: str, task_type: str = "data_analysis", token_callback=None) -> str:
     """
     Translates a natural language query into cuDF code using the fine-tuned model on Modal.
     Falls back to pre-written code if the LLM is unavailable.
     """
     logger.info(f"Synthesizing GPU (cuDF) code for query: {query}")
+
+    cached = get_cached_code(DATASET_SCHEMA, query, "gpu")
+    if cached:
+        logger.info("Using cached GPU code.")
+        if token_callback:
+            import time
+            for chunk in cached.split(" "):
+                token_callback(chunk + " ")
+                time.sleep(0.015)
+        return cached
 
     user_prompt = f"""
 Task Type: {task_type}
@@ -278,10 +332,12 @@ Dataset schema:
 
 Assume there is a pre-loaded cuDF DataFrame named `df` with the columns above.
 """
-    model_output = _call_modal(SYSTEM_PROMPT_CUDF, user_prompt)
+
+    model_output = _call_modal(SYSTEM_PROMPT_CUDF, user_prompt, token_callback)
 
     if model_output.strip():
-        return _extract_code(model_output)
+        code = _extract_code(model_output)
+        return code
 
     mock = _get_mock_code(query, "gpu")
     if mock:
@@ -291,14 +347,23 @@ Assume there is a pre-loaded cuDF DataFrame named `df` with the columns above.
     logger.warning("No mock code available for this query — returning generic placeholder.")
     return "result = df.head(5).to_pandas()"
 
-
-def synthesize_cpu_code(query: str, task_type: str = "data_analysis") -> str:
+def synthesize_cpu_code(query: str, task_type: str = "data_analysis", token_callback=None) -> str:
     """
     Translates a natural language query into pandas code using the fine-tuned model on Modal.
     Uses SYSTEM_PROMPT_PANDAS — a separate prompt that explicitly forbids cudf/cuml.
     Falls back to pre-written code if the LLM is unavailable.
     """
     logger.info(f"Synthesizing CPU (pandas) code for query: {query}")
+
+    cached = get_cached_code(DATASET_SCHEMA, query, "cpu")
+    if cached:
+        logger.info("Using cached CPU code.")
+        if token_callback:
+            import time
+            for chunk in cached.split(" "):
+                token_callback(chunk + " ")
+                time.sleep(0.015)
+        return cached
 
     user_prompt = f"""
 Task Type: {task_type}
@@ -309,10 +374,11 @@ Dataset schema:
 
 Assume there is a pre-loaded pandas DataFrame named `df` with the columns above.
 """
-    model_output = _call_modal(SYSTEM_PROMPT_PANDAS, user_prompt)
+    model_output = _call_modal(SYSTEM_PROMPT_PANDAS, user_prompt, token_callback)
     
     if model_output.strip():
-        return _extract_code(model_output)
+        code = _extract_code(model_output)
+        return code
 
     mock = _get_mock_code(query, "cpu")
     if mock:
@@ -357,3 +423,28 @@ Output ONLY the corrected valid Python code. No markdown, no explanations.
         return _extract_code(model_output)
     logger.warning("LLM fix unavailable — returning original code.")
     return original_code
+
+RELEVANCE_SYSTEM_PROMPT = (
+    "You are a strict relevance classifier for a data analytics platform.\n"
+    "You are given a dataset schema and a user's natural language question.\n"
+    "Decide whether the question can plausibly be answered using ONLY the columns in the schema.\n"
+    "Respond with EXACTLY one word: YES or NO. Nothing else."
+)
+
+
+def check_query_relevance(query: str) -> bool | None:
+    """
+    Best-effort LLM relevance check, used as a fallback when the cheap keyword
+    heuristic (see app.services.query_validator) finds no signal at all.
+
+    Returns True/False, or None if the LLM call itself fails (e.g. Modal
+    credentials not configured) — callers should treat None as "unknown" and
+    fall back to a conservative default rather than raising.
+    """
+    user_prompt = f"Dataset schema:\n{DATASET_SCHEMA}\n\nUser question: {query}\n"
+    try:
+        output = _call_modal(RELEVANCE_SYSTEM_PROMPT, user_prompt)
+    except Exception as e:
+        logger.warning(f"Relevance check LLM call failed, falling back to heuristic only: {e}")
+        return None
+    return output.strip().upper().startswith("YES")

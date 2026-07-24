@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { getDatasetInfo, runBenchmark } from './api/client'
 import './index.css'
+import AutoChart from './AutoChart'
 
 const TASK_TYPES = [
   { value: 'classification', label: 'Classification' },
@@ -48,6 +49,11 @@ const SWEEP_DATA = [
   { label: 'Forecasting',          sub: 'linreg_fit',     val: 11.7, pct: 20,  type: 'ink' },
   { label: 'Segmentation (weak)',  sub: 'kmeans_fit',     val: 3.0,  pct: 5,   type: 'slow' },
 ]
+
+function cleanCode(raw) {
+  if (!raw) return ""
+  return raw.replace(/^```python\n?/g, '').replace(/\n?```$/g, '')
+}
 
 function formatVal(val) {
   if (val === null || val === undefined) return '—'
@@ -138,9 +144,12 @@ function SearchIcon() {
 export default function App() {
   const [query, setQuery]             = useState(INQUIRIES[0].query)
   const [taskType, setTaskType]       = useState(INQUIRIES[0].task_type)
+  const [datasetScale, setDatasetScale] = useState(1500000)
   const [stepIdx, setStepIdx]         = useState(STEPS.length - 1)
   const [isRunning, setIsRunning]     = useState(false)
   const [apiResult, setApiResult]     = useState(null)
+  const [cpuStream, setCpuStream]     = useState("")
+  const [gpuStream, setGpuStream]     = useState("")
   const [apiError, setApiError]       = useState(null)
   const [debugLines, setDebugLines]   = useState([{ cls: 'dl-sys', text: 'System initialized. Awaiting parameters.' }])
   const [showSpeedup, setShowSpeedup] = useState(false)
@@ -205,6 +214,8 @@ export default function App() {
     if (isRunning || !canRun) return
     setIsRunning(true)
     setApiResult(null)
+    setCpuStream("")
+    setGpuStream("")
     setApiError(null)
     setShowSpeedup(false)
     setShowResults(false)
@@ -232,10 +243,10 @@ export default function App() {
     setStepIdx(0)
 
     try {
-      const res = await fetch('/api/benchmark', {
+      const res = await fetch('/api/benchmark/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: inquiry.query, task_type: inquiry.task_type }),
+        body: JSON.stringify({ query: query, task_type: taskType, dataset_scale: datasetScale }),
       })
       if (!res.ok) {
         let errMsg = `HTTP ${res.status}`
@@ -245,32 +256,70 @@ export default function App() {
         } catch { /* response body wasn't JSON */ }
         throw new Error(errMsg)
       }
-      const data = await res.json()
 
-      stepTimers.forEach(clearTimeout)
-      setStepIdx(4)
-      setApiResult(data)
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+      let finalData = { cpu: null, gpu: null, total_wall_time_sec: 0, cpu_code: "", gpu_code: "" }
 
-      const cpuS = data.cpu.execution_time_sec
-      const gpuS = data.gpu.execution_time_sec
-      const wallS = data.total_wall_time_sec
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n\n')
+        buffer = lines.pop() // keep incomplete chunk
 
-      if (cpuS > 0) addLog('dl-ok', `  [SUCCESS] CPU execution concluded in ${cpuS.toFixed(3)}s`)
-      if (gpuS > 0) addLog('dl-ok', `  [SUCCESS] GPU execution concluded in ${gpuS.toFixed(3)}s`)
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = JSON.parse(line.slice(6))
+            
+            if (data.type === 'token_cpu') {
+              setCpuStream(prev => prev + data.value)
+            } else if (data.type === 'token_gpu') {
+              setGpuStream(prev => prev + data.value)
+            } else if (data.type === 'result_cpu') {
+              finalData.cpu = data.value
+              finalData.cpu_code = data.value.code
+              setApiResult({ ...finalData })
+              setShowResults(true)
+            } else if (data.type === 'result_gpu') {
+              finalData.gpu = data.value
+              finalData.gpu_code = data.value.code
+              setApiResult({ ...finalData })
+              setShowResults(true)
+            } else if (data.type === 'done') {
+              finalData.total_wall_time_sec = data.total_wall_time_sec
+              setApiResult({ ...finalData })
+              setStepIdx(4)
 
-      data.gpu.logs.slice(-3).forEach(l => addLog('dl-sys', `  [GPU] ${l}`))
-      data.cpu.logs.slice(-3).forEach(l => addLog('dl-sys', `  [CPU] ${l}`))
+              // Log results
+              const cpuS = finalData.cpu?.execution_time_sec ?? 0
+              const gpuS = finalData.gpu?.execution_time_sec ?? 0
+              const wallS = finalData.total_wall_time_sec
 
-      addLog('dl-cmd', `> Total wall time: ${wallS.toFixed(1)}s`)
+              if (cpuS > 0) addLog('dl-ok', `  [SUCCESS] CPU execution concluded in ${cpuS.toFixed(3)}s`)
+              if (gpuS > 0) addLog('dl-ok', `  [SUCCESS] GPU execution concluded in ${gpuS.toFixed(3)}s`)
 
-      if (cpuS > 0 && gpuS > 0) {
-        const mult = cpuS / gpuS
-        if (mult > 1) addLog('dl-ok', `  [RESULT] GPU is ${mult.toFixed(1)}x faster than CPU`)
-        else addLog('dl-fix', `  [RESULT] CPU is ${(1 / mult).toFixed(1)}x faster at this scale`)
+              // Log sandbox notes
+              if (finalData.gpu?.logs) finalData.gpu.logs.forEach(l => addLog('dl-sys', `  [GPU] ${l}`))
+              if (finalData.cpu?.logs) finalData.cpu.logs.forEach(l => addLog('dl-sys', `  [CPU] ${l}`))
+
+              addLog('dl-cmd', `> Total wall time: ${wallS.toFixed(1)}s`)
+
+              if (cpuS > 0 && gpuS > 0) {
+                const mult = cpuS / gpuS
+                if (mult > 1) addLog('dl-ok', `  [RESULT] GPU is ${mult.toFixed(1)}x faster than CPU`)
+                else addLog('dl-fix', `  [RESULT] CPU is ${(1/mult).toFixed(1)}x faster at this scale`)
+              }
+
+              setTimeout(() => setShowSpeedup(true), 600)
+            } else if (data.type === 'error') {
+              throw new Error(data.message)
+            }
+          }
+        }
       }
-
-      setTimeout(() => setShowResults(true), 300)
-      setTimeout(() => setShowSpeedup(true), 600)
 
     } catch (err) {
       stepTimers.forEach(clearTimeout)
@@ -351,7 +400,6 @@ export default function App() {
               placeholder="Ask anything about the order data — e.g. “Find the 15 products with the fastest-growing sales this month.”"
             />
           </div>
-
           <div className="meta-row">
             <div className="meta-field">
               <span className="meta-label">Analysis Type</span>
@@ -361,6 +409,21 @@ export default function App() {
                 ))}
               </select>
             </div>
+            <div className="run-meta" style={{ display: 'flex', alignItems: 'center', marginLeft: 'auto', gap: '8px' }}>
+              Dataset: Synthetic (
+              <select 
+                value={datasetScale} 
+                onChange={e => setDatasetScale(Number(e.target.value))}
+                className="scale-select"
+              >
+                <option value={100000}>100K</option>
+                <option value={500000}>500K</option>
+                <option value={1000000}>1M</option>
+                <option value={1500000}>1.5M</option>
+              </select>
+               rows)
+            </div>
+          </div>
 
             <div className="meta-field">
               <span className="meta-label">Available Columns</span>
@@ -377,7 +440,6 @@ export default function App() {
               <div><b>Dataset</b>{datasetInfo ? `${datasetInfo.dataset_name} (${datasetInfo.row_count.toLocaleString()} rows)` : '—'}</div>
               <div><b>Model</b>{datasetInfo ? datasetInfo.model_name : '—'}</div>
             </div>
-          </div>
 
           {datasetInfoError && (
             <p className="dataset-info-warning">
@@ -390,6 +452,7 @@ export default function App() {
               {isRunning ? 'Running…' : 'Execute'}
             </button>
           </div>
+
         </div>
 
         {/* STEPPER */}
@@ -427,7 +490,7 @@ export default function App() {
               <div className="code-block">
                 {apiResult?.cpu_code
                   ? apiResult.cpu_code
-                  : <span className="cm">// Awaiting synthesis...</span>}
+                  : cpuStream ? cleanCode(cpuStream) : <span className="cm">// Awaiting synthesis...</span>}
               </div>
             </div>
             <div>
@@ -443,9 +506,14 @@ export default function App() {
               <div className="code-block">
                 {apiResult?.gpu_code
                   ? apiResult.gpu_code
-                  : <span className="cm">// Awaiting synthesis...</span>}
+                  : gpuStream ? cleanCode(gpuStream) : <span className="cm">// Awaiting synthesis...</span>}
               </div>
             </div>
+          </div>
+
+          <div className="results-wrapper">
+            {/(chart|plot|graph|visual|diff)/i.test(query) && <AutoChart data={liveRows} />}
+            <ResultsTable rows={liveRows} />
           </div>
 
           <div className="debug-log" ref={debugRef}>
@@ -504,7 +572,6 @@ export default function App() {
                 )}
               </div>
             </div>
-
             <div className="results-col">
               <div className={`results-wrapper${showResults ? ' visible' : ''}`}>
                 <div className="results-header">
@@ -518,6 +585,7 @@ export default function App() {
             </div>
           </div>
         </div>
+
 
         {/* APPENDIX */}
         <div className="appendix-grid" ref={appendixRef}>
@@ -549,29 +617,29 @@ export default function App() {
             <div className="stats-grid">
               <div className="stat-box">
                 <div className="stat-val accent">
-                  {speedupMult && gpuWins ? `${speedupMult.toFixed(1)}×` : '215×'}
+                  {speedupMult ? (gpuWins ? `${speedupMult.toFixed(1)}×` : `${(1/speedupMult).toFixed(1)}× (CPU)`) : '-'}
                 </div>
-                <div className="stat-lbl">{speedupMult && gpuWins ? 'Live GPU Speedup' : 'Peak RF Speedup'}</div>
+                <div className="stat-lbl">Live Speedup</div>
               </div>
               <div className="stat-box">
-                <div className="stat-val">58.9×</div>
-                <div className="stat-lbl">Rolling Window (20M)</div>
+                <div className="stat-val muted">{apiResult ? `${cpuS.toFixed(2)}s` : '-'}</div>
+                <div className="stat-lbl">CPU Execution</div>
               </div>
               <div className="stat-box">
-                <div className="stat-val muted">{apiResult ? `${cpuS.toFixed(2)}s` : '81s'}</div>
-                <div className="stat-lbl">{apiResult ? 'CPU This Run' : 'CPU Baseline (RF)'}</div>
+                <div className="stat-val">{apiResult ? `${gpuS.toFixed(2)}s` : '-'}</div>
+                <div className="stat-lbl">GPU Execution</div>
               </div>
               <div className="stat-box">
-                <div className="stat-val">{apiResult ? `${gpuS.toFixed(2)}s` : '0.38s'}</div>
-                <div className="stat-lbl">{apiResult ? 'GPU This Run' : 'GPU Execution (RF)'}</div>
-              </div>
-              <div className="stat-box">
-                <div className="stat-val">1M</div>
+                <div className="stat-val">{datasetScale >= 1000000 ? `${(datasetScale/1000000).toFixed(1)}M` : `${datasetScale/1000}K`}</div>
                 <div className="stat-lbl">Records Processed</div>
               </div>
               <div className="stat-box">
-                <div className="stat-val">8/8</div>
-                <div className="stat-lbl">Synthesis Success</div>
+                <div className="stat-val">{apiResult ? `${apiResult.gpu?.attempts_used || 1}/3` : '-'}</div>
+                <div className="stat-lbl">LLM Attempts</div>
+              </div>
+              <div className="stat-box">
+                <div className="stat-val">{apiResult ? (apiResult.gpu?.confidence || 'High').toUpperCase() : '-'}</div>
+                <div className="stat-lbl">Code Confidence</div>
               </div>
             </div>
           </div>

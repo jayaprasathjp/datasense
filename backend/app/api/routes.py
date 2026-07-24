@@ -1,13 +1,14 @@
 import time
 import json
 import os
-import sys
 import threading
+import queue
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
-from app.data.bigquery import PARQUET_FILE_PATH
+from app.data.bigquery import get_parquet_path
 from app.services.llm_engine import synthesize_code, synthesize_cpu_code, MODEL_NAME
 from app.services.modal_sandbox import execute_on_gpu, execute_on_cpu, confidence_from_attempts
 from app.services.query_validator import validate_query
@@ -30,6 +31,7 @@ class DatasetInfoResponse(BaseModel):
 class SynthesizeRequest(BaseModel):
     query: str
     task_type: str = "data_analysis"
+    dataset_scale: int = 1_500_000
 
 class SynthesizeResponse(BaseModel):
     cpu_code: str
@@ -37,6 +39,7 @@ class SynthesizeResponse(BaseModel):
 
 class ExecuteRequest(BaseModel):
     code: str
+    dataset_scale: int = 1_500_000
 
 class ExecuteResponse(BaseModel):
     execution_time_sec: float
@@ -86,7 +89,7 @@ def synthesize(request: SynthesizeRequest):
 def execute_cpu(request: ExecuteRequest):
     """Execute pandas code on CPU inside a Modal CPU Sandbox for fair benchmarking."""
     try:
-        response_data = execute_on_cpu(request.code)
+        response_data = execute_on_cpu(request.code, request.dataset_scale)
         attempts_used = response_data.get("attempts_used", 1)
         return ExecuteResponse(
             execution_time_sec=response_data["execution_time_sec"],
@@ -104,7 +107,7 @@ def execute_cpu(request: ExecuteRequest):
 def execute_gpu(request: ExecuteRequest):
     """Execute cuDF code on GPU (T4) inside a Modal GPU Sandbox for fair benchmarking."""
     try:
-        response_data = execute_on_gpu(request.code)
+        response_data = execute_on_gpu(request.code, request.dataset_scale)
         attempts_used = response_data.get("attempts_used", 1)
         return ExecuteResponse(
             execution_time_sec=response_data["execution_time_sec"],
@@ -121,7 +124,7 @@ def execute_gpu(request: ExecuteRequest):
 
 # ── Local execution fallback (when Modal sandboxes are unavailable) ──────────
 
-def _execute_locally(code: str, mode: str) -> dict:
+def _execute_locally(code: str, mode: str, scale: int = 1_500_000) -> dict:
     """
     Runs LLM-generated code locally using pandas (or attempts cuDF if available).
     This avoids the need for Modal sandboxes during development / demo.
@@ -132,11 +135,13 @@ def _execute_locally(code: str, mode: str) -> dict:
     logs = [f"Mode: {mode.upper()} (local fallback)"]
     logs.append("Attempting local execution...")
 
-    if not os.path.exists(PARQUET_FILE_PATH):
-        return {"execution_time_sec": 0.0, "warmup_time_sec": 0.0, "results": [], "logs": logs + [f"Parquet not found at {PARQUET_FILE_PATH}"]}
+    parquet_path = get_parquet_path(scale)
+
+    if not os.path.exists(parquet_path):
+        return {"execution_time_sec": 0.0, "warmup_time_sec": 0.0, "results": [], "logs": logs + [f"Parquet not found at {parquet_path}"]}
 
     try:
-        df = pd.read_parquet(PARQUET_FILE_PATH)
+        df = pd.read_parquet(parquet_path)
         logs.append(f"Data loaded: {len(df)} rows")
 
         # If GPU mode but cuDF not available, still run with pandas
@@ -259,8 +264,13 @@ def benchmark(request: SynthesizeRequest):
     def run_gpu():
         try:
             code = synthesize_code(request.query, request.task_type)
-            result = execute_on_gpu(code)
-            result["code"] = code
+            result = execute_on_gpu(code, request.dataset_scale)
+            result["code"] = result.get("successful_code", code)
+            
+            if result.get("results"):
+                from app.services.cache import set_cached_code
+                from app.data.bigquery import DATASET_SCHEMA
+                set_cached_code(DATASET_SCHEMA, request.query, "gpu", result["code"])
             if result.get("results") is not None:
                 if result.get("results"):
                     return result
@@ -269,7 +279,7 @@ def benchmark(request: SynthesizeRequest):
             # Fallback: local execution
             logger = __import__("logging").getLogger(__name__)
             logger.info("Modal GPU unavailable — trying local execution fallback.")
-            local = _execute_locally(code, "gpu")
+            local = _execute_locally(code, "gpu", request.dataset_scale)
             local["code"] = code
             if local.get("results") is not None:
                 if local.get("results"):
@@ -285,8 +295,13 @@ def benchmark(request: SynthesizeRequest):
     def run_cpu():
         try:
             code = synthesize_cpu_code(request.query, request.task_type)
-            result = execute_on_cpu(code)
-            result["code"] = code
+            result = execute_on_cpu(code, request.dataset_scale)
+            result["code"] = result.get("successful_code", code)
+            
+            if result.get("results"):
+                from app.services.cache import set_cached_code
+                from app.data.bigquery import DATASET_SCHEMA
+                set_cached_code(DATASET_SCHEMA, request.query, "cpu", result["code"])
             if result.get("results") is not None:
                 if result.get("results"):
                     return result
@@ -294,7 +309,7 @@ def benchmark(request: SynthesizeRequest):
             # Fallback: local execution
             logger = __import__("logging").getLogger(__name__)
             logger.info("Modal CPU unavailable — trying local execution fallback.")
-            local = _execute_locally(code, "cpu")
+            local = _execute_locally(code, "cpu", request.dataset_scale)
             local["code"] = code
             if local.get("results") is not None:
                 if local.get("results"):
@@ -347,3 +362,68 @@ def benchmark(request: SynthesizeRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@router.post("/api/benchmark/stream")
+def benchmark_stream(request: SynthesizeRequest):
+    """
+    Streaming version of the all-in-one benchmark endpoint.
+    Streams SSE tokens during LLM synthesis, then sends execution results.
+    """
+    q = queue.Queue()
+
+    def run_gpu():
+        def token_cb(token):
+            q.put({"type": "token_gpu", "value": token})
+            
+        try:
+            code = synthesize_code(request.query, request.task_type, token_callback=token_cb)
+            result = execute_on_gpu(code, request.dataset_scale)
+            result["code"] = result.get("successful_code", code)
+            
+            if result.get("results"):
+                from app.services.cache import set_cached_code
+                from app.data.bigquery import DATASET_SCHEMA
+                set_cached_code(DATASET_SCHEMA, request.query, "gpu", result["code"])
+                
+            q.put({"type": "result_gpu", "value": result})
+        except Exception as e:
+            q.put({"type": "error", "message": f"GPU Error: {str(e)}"})
+
+    def run_cpu():
+        def token_cb(token):
+            q.put({"type": "token_cpu", "value": token})
+            
+        try:
+            code = synthesize_cpu_code(request.query, request.task_type, token_callback=token_cb)
+            result = execute_on_cpu(code, request.dataset_scale)
+            result["code"] = result.get("successful_code", code)
+            
+            if result.get("results"):
+                from app.services.cache import set_cached_code
+                from app.data.bigquery import DATASET_SCHEMA
+                set_cached_code(DATASET_SCHEMA, request.query, "cpu", result["code"])
+                
+            q.put({"type": "result_cpu", "value": result})
+        except Exception as e:
+            q.put({"type": "error", "message": f"CPU Error: {str(e)}"})
+
+    def background_task():
+        t_start = time.perf_counter()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f_gpu = pool.submit(run_gpu)
+            f_cpu = pool.submit(run_cpu)
+            f_gpu.result()
+            f_cpu.result()
+        total_wall = time.perf_counter() - t_start
+        q.put({"type": "done", "total_wall_time_sec": round(total_wall, 3)})
+
+    threading.Thread(target=background_task, daemon=True).start()
+
+    def event_stream():
+        while True:
+            item = q.get()
+            yield f"data: {json.dumps(item)}\n\n"
+            if item["type"] in ["done", "error"]:
+                break
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

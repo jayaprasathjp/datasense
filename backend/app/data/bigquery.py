@@ -8,16 +8,17 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants (matching notebook Section C)
 # ─────────────────────────────────────────────────────────────────────────────
-N_ROWS = 1_000_000
+DATA_SCALES = [100_000, 500_000, 1_000_000, 1_500_000]
 N_STORES, N_PRODUCTS, N_USERS, N_REGIONS = 250, 2000, 50_000, 8
 
 # Global DataFrame
 global_df: pd.DataFrame | None = None
 
-# Parquet path — one level above this file's directory (i.e. backend/app/data.parquet)
-PARQUET_FILE_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data.parquet"
-)
+def get_parquet_path(scale: int) -> str:
+    """Returns the parquet path for a given row scale."""
+    return os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), f"data_{scale}.parquet"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -159,7 +160,7 @@ def load_bigquery_or_synthetic(n_rows: int) -> pd.DataFrame:
 def fetch_ecommerce_data() -> None:
     """
     Loads data (BigQuery or synthetic fallback) into global_df and writes
-    a Parquet file at PARQUET_FILE_PATH for Modal Sandbox upload.
+    Parquet files for each data scale for Modal Sandbox upload.
     """
     global global_df
 
@@ -167,13 +168,18 @@ def fetch_ecommerce_data() -> None:
         logger.info("Data already loaded.")
         return
 
-    logger.info(f"Loading {N_ROWS:,}-row dataset (BigQuery or synthetic fallback)...")
-    global_df = load_bigquery_or_synthetic(N_ROWS)
+    max_scale = max(DATA_SCALES)
+    logger.info(f"Loading {max_scale:,}-row dataset (BigQuery or synthetic fallback)...")
+    global_df = load_bigquery_or_synthetic(max_scale)
     logger.info(f"Dataset ready: {global_df.shape[0]:,} rows × {global_df.shape[1]} cols")
 
-    logger.info(f"Writing Parquet to {PARQUET_FILE_PATH} for Modal Sandbox transfer...")
-    global_df.to_parquet(PARQUET_FILE_PATH, engine="pyarrow")
-    logger.info("Parquet export complete.")
+    for scale in DATA_SCALES:
+        path = get_parquet_path(scale)
+        logger.info(f"Writing Parquet for {scale:,} rows to {path}...")
+        sub_df = global_df.head(scale)
+        sub_df.to_parquet(path, engine="pyarrow")
+        
+    logger.info("Parquet exports complete.")
 
 
 def get_dataframe() -> pd.DataFrame:
@@ -226,6 +232,6 @@ def get_dataset_info() -> dict:
     """Static metadata describing the dataset served to the LLM/sandboxes, for the frontend."""
     return {
         "dataset_name": DATASET_NAME,
-        "row_count": N_ROWS,
+        "row_count": max(DATA_SCALES),
         "columns": DATASET_COLUMNS,
     }

@@ -89,6 +89,34 @@ body {
 .nav-item.active .nav-item-index { color: var(--accent); }
 
 .nav-divider { height: 1px; background: var(--border); margin: 0.5rem 0.5rem 0.75rem; }
+.run-action { display: flex; justify-content: space-between; align-items: center; margin-top: 1.5rem; }
+.run-meta { font-family: var(--sans); font-size: 0.7rem; color: var(--ink-light); text-transform: uppercase; letter-spacing: 0.1em; line-height: 1.5; }
+.scale-select {
+  background: var(--paper-alt);
+  border: 1px solid var(--ink-lighter);
+  border-radius: 4px;
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 0.2rem 0.5rem;
+  margin: 0 0.4rem;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s ease;
+}
+.scale-select:hover, .scale-select:focus { border-color: var(--gpu-accent); color: var(--gpu-accent); background: #fff; }
+.run-btn {
+  padding: 0.8rem 2.5rem; background: var(--ink); color: var(--paper);
+  font-family: var(--sans); font-size: 0.75rem; font-weight: 600;
+  letter-spacing: 0.15em; text-transform: uppercase;
+  border: 1px solid var(--ink); cursor: pointer; transition: all 0.2s ease;
+  border-radius: 999px;
+}
+.run-btn:hover:not(:disabled) { background: var(--gpu-accent); border-color: var(--gpu-accent); }
+.run-btn:disabled { background: var(--ink-lighter); border-color: var(--ink-lighter); cursor: not-allowed; }
 
 .nav-item-custom { color: var(--accent); font-weight: 600; }
 .nav-item-custom:hover { background: var(--accent-soft); }

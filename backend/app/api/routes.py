@@ -369,6 +369,15 @@ def benchmark_stream(request: SynthesizeRequest):
     Streaming version of the all-in-one benchmark endpoint.
     Streams SSE tokens during LLM synthesis, then sends execution results.
     """
+    is_relevant, reason = validate_query(request.query)
+    if not is_relevant:
+        # Instead of HTTPException, we should stream an error event so the frontend handles it gracefully
+        q = queue.Queue()
+        q.put({"type": "error", "message": reason})
+        def error_stream():
+            yield f"data: {json.dumps(q.get())}\n\n"
+        return StreamingResponse(error_stream(), media_type="text/event-stream")
+
     q = queue.Queue()
 
     def run_gpu():

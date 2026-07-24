@@ -274,7 +274,9 @@ export default function App() {
           if (line.startsWith('data: ')) {
             const data = JSON.parse(line.slice(6))
             
-            if (data.type === 'token_cpu') {
+            if (data.type === 'error') {
+              throw new Error(data.message)
+            } else if (data.type === 'token_cpu') {
               setCpuStream(prev => prev + data.value)
             } else if (data.type === 'token_gpu') {
               setGpuStream(prev => prev + data.value)

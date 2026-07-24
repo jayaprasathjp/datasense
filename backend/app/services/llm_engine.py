@@ -323,12 +323,15 @@ def synthesize_code(query: str, task_type: str = "data_analysis", token_callback
                 time.sleep(0.015)
         return cached
 
+    from app.services.pii_scanner import redact_schema
+    redacted_schema = redact_schema(DATASET_SCHEMA)
+
     user_prompt = f"""
 Task Type: {task_type}
 Query: {query}
 
 Dataset schema:
-{DATASET_SCHEMA}
+{redacted_schema}
 
 Assume there is a pre-loaded cuDF DataFrame named `df` with the columns above.
 """
@@ -365,12 +368,15 @@ def synthesize_cpu_code(query: str, task_type: str = "data_analysis", token_call
                 time.sleep(0.015)
         return cached
 
+    from app.services.pii_scanner import redact_schema
+    redacted_schema = redact_schema(DATASET_SCHEMA)
+
     user_prompt = f"""
 Task Type: {task_type}
 Query: {query}
 
 Dataset schema:
-{DATASET_SCHEMA}
+{redacted_schema}
 
 Assume there is a pre-loaded pandas DataFrame named `df` with the columns above.
 """
